@@ -168,21 +168,15 @@ with st.sidebar:
                     st.success(f"✓ Token obtenido ({tok[:15]}…)")
                     # Paso 3: descargar 1 ticker de prueba
                     test_tk = st.session_state.tickers[0] if st.session_state.tickers else "ALICORC1"
-                    st.write(f"**Probando rangos de fecha para '{test_tk}':**")
-                    # Probar rangos progresivos para encontrar el límite
-                    hoy = pd.Timestamp.today()
-                    for meses in [1, 3, 6, 12, 24, 36, 60]:
-                        ini = (hoy - pd.DateOffset(months=meses)).strftime("%Y%m%d")
-                        fin = hoy.strftime("%Y%m%d")
-                        dbg = bvl_data.debug_history(test_tk, ini, fin, tok, key)
-                        sc = dbg.get("status_code")
-                        bl = dbg.get("body_len", 0)
-                        if sc == 200 and bl > 0:
-                            st.success(f"✓ {meses} meses ({ini}→{fin}): {bl} registros")
-                        else:
-                            txt = dbg.get("texto_crudo", dbg.get("respuesta_completa", ""))
-                            st.error(f"❌ {meses} meses: status {sc} · {txt[:60]}")
-                            break
+                    start,end=_period_to_dates("15y")
+                    s=bvl_data.download_prices([test_tk],start,end,cid,csec,key)
+                    if s is None or s.empty:
+                        st.error(f"❌ Sin datos para '{test_tk}' tras descarga por tramos.")
+                    else:
+                        col=s.columns[0]
+                        st.success(f"✓ {test_tk}: {len(s)} días de retornos "
+                                   f"(descarga por tramos de 4 años)")
+                        st.caption(f"Rango: {s.index.min().date()} → {s.index.max().date()}")
 
 # Descargar siempre con 15 años (fijo)
 OPT_PERIOD = "15y"
