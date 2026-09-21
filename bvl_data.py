@@ -99,6 +99,41 @@ def get_history(ticker: str, start: str, end: str,
         return None
 
 
+def debug_history(ticker: str, start: str, end: str, token: str, api_key: str) -> dict:
+    """
+    Versión de diagnóstico: devuelve el detalle crudo de la respuesta HTTP
+    para entender por qué no llegan datos.
+    """
+    info = {"ticker": ticker, "start": start, "end": end}
+    try:
+        resp = requests.get(
+            DATA_URL,
+            params={"start-date": start, "end-date": end, "ticker": ticker},
+            headers={"x-api-key": api_key, "Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        info["status_code"] = resp.status_code
+        info["url"] = resp.url
+        try:
+            j = resp.json()
+            info["json_keys"] = list(j.keys()) if isinstance(j, dict) else "no es dict"
+            body = j.get("body") if isinstance(j, dict) else None
+            info["body_type"] = type(body).__name__
+            info["body_len"] = len(body) if body else 0
+            if body and len(body) > 0:
+                info["primer_registro"] = body[0]
+            else:
+                # Mostrar el JSON completo si no hay body
+                info["respuesta_completa"] = str(j)[:500]
+        except Exception as je:
+            info["json_error"] = str(je)
+            info["texto_crudo"] = resp.text[:500]
+        return info
+    except Exception as e:
+        info["excepcion"] = str(e)
+        return info
+
+
 def download_prices(tickers, start, end, client_id, client_secret, api_key):
     """
     Descarga precios de varios tickers y devuelve un DataFrame de log-retornos
