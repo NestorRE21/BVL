@@ -171,25 +171,27 @@ def detectar_perfil(rv_pct):
     if rv_pct <= 65:   return "Crecimiento", "Mayor exposición a renta variable."
     if rv_pct <= 80:   return "Agresivo", "Alta exposición a renta variable."
     return "Muy agresivo", "Máxima exposición a renta variable."
-EJ = ["AAPL","MSFT","NVDA","JNJ","KO","QQQ"]
+EJ = ["ALICORC1","CREDITC1","FERREYC1","BUENAVC1","ENGIEC1","INRETC1"]
 
 # Catálogo de inversiones populares con nombres amigables (para quien no conoce tickers)
 POPULARES_RV = [
-    ("AAPL","Apple","📱"),("MSFT","Microsoft","💻"),("GOOGL","Google","🔎"),
-    ("AMZN","Amazon","📦"),("NVDA","Nvidia","🎮"),("META","Meta (Facebook)","👥"),
-    ("TSLA","Tesla","🚗"),("KO","Coca-Cola","🥤"),("MCD","McDonald's","🍔"),
-    ("DIS","Disney","🎬"),("NFLX","Netflix","🎥"),("V","Visa","💳"),
-    ("JNJ","Johnson & Johnson","💊"),("JPM","JPMorgan","🏦"),
-    ("QQQ","Tecnológicas EE.UU. (QQQ)","📈"),("SPY","S&P 500 (SPY)","🇺🇸"),
-    ("VTI","Todo el mercado EE.UU. (VTI)","🌐"),
+    ("ALICORC1","Alicorp (consumo)","🍜"),("CREDITC1","Credicorp / BCP (banco)","🏦"),
+    ("BAP","Credicorp ADR (banco)","🏦"),("FERREYC1","Ferreycorp (industrial)","🚜"),
+    ("BUENAVC1","Buenaventura (minera)","⛏️"),("VOLCABC1","Volcan (minera)","⛏️"),
+    ("ENGIEC1","Engie (energía)","⚡"),("LUSURC1","Luz del Sur (energía)","💡"),
+    ("INRETC1","InRetail (retail)","🛒"),("UNACEMC1","Unacem (cemento)","🏗️"),
+    ("SCCO","Southern Copper (minera)","⛏️"),("CVERDEC1","Cerro Verde (minera)","⛏️"),
+    ("BACKUAC2","Backus (bebidas)","🍺"),("MINSURI1","Minsur (minera)","⛏️"),
 ]
 POPULARES_RF = [
     ("AGG","Bonos EE.UU. amplio (AGG)","🏛️"),("BND","Bonos totales (BND)","🏦"),
     ("TLT","Bonos largo plazo (TLT)","📉"),("SHY","Bonos corto plazo (SHY)","🛡️"),
     ("LQD","Bonos corporativos (LQD)","🏢"),("TIP","Bonos anti-inflación (TIP)","📊"),
+    ("IEF","Bonos 7-10 años (IEF)","📋"),("EMB","Bonos emergentes (EMB)","🌎"),
 ]
 POPULARES_BK = [
-    ("^GSPC","S&P 500 (EE.UU.)","🇺🇸"),("^IXIC","Nasdaq (tecnología)","💻"),
+    ("^GSPC","S&P 500 (EE.UU.)","🇺🇸"),("^SPBLPGPT","S&P/BVL Perú General","🇵🇪"),
+    ("EPU","ETF Perú (EPU)","🇵🇪"),("^IXIC","Nasdaq (tecnología)","💻"),
     ("^DJI","Dow Jones","🏭"),("ACWI","Mundo (ACWI)","🌍"),
 ]
 
@@ -252,8 +254,18 @@ def _period_to_dates(period):
         start = end - pd.DateOffset(years=15)
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
+def _yf_period(period):
+    """Convierte '15y' a parámetros de yfinance."""
+    if period in ["1y","2y","3y","5y","10y","max","ytd"]:
+        return {"period": period}
+    if period.endswith("y"):
+        years=int(period.replace("y",""))
+        return {"start": (pd.Timestamp.today()-pd.DateOffset(years=years)).strftime("%Y-%m-%d")}
+    return {"period": period}
+
 @st.cache_data(show_spinner=False,ttl=600)
 def dl_eq(tickers,period="15y"):
+    """Renta variable: SOLO acciones de la BVL (por API BVL)."""
     tickers=[t.strip().upper() for t in tickers if t and t.strip()]
     if not tickers: return None
     cid,csec,key=_get_creds()
@@ -262,12 +274,25 @@ def dl_eq(tickers,period="15y"):
     return bvl_data.download_prices(tickers,start,end,cid,csec,key)
 
 @st.cache_data(show_spinner=False,ttl=600)
+def dl_yf(tickers,period="15y"):
+    """Renta fija y benchmarks: desde yfinance (ETFs, índices). Log-retornos diarios."""
+    import yfinance as yf
+    tickers=[t.strip().upper() for t in tickers if t and t.strip()]
+    if not tickers: return None
+    params=_yf_period(period)
+    raw=yf.download(tickers,**params,interval="1d",auto_adjust=True,progress=False)
+    if raw is None or raw.empty: return None
+    px=raw["Close"].copy() if isinstance(raw.columns,pd.MultiIndex) else raw[["Close"]].rename(columns={"Close":tickers[0]})
+    px=px.dropna(how="all"); px.index=pd.to_datetime(px.index).tz_localize(None)
+    cal=pd.date_range(px.index.min(),px.index.max(),freq="B")
+    px=px.reindex(cal).ffill()
+    return np.log(px/px.shift(1)).replace([np.inf,-np.inf],np.nan).dropna(how="all")
+
+@st.cache_data(show_spinner=False,ttl=600)
 def dl_bk(tks,period="15y"):
-    cid,csec,key=_get_creds()
-    if not cid: return {}
-    start,end=_period_to_dates(period)
+    """Benchmarks: desde yfinance. Devuelve dict {ticker: Serie log-ret}."""
+    lr=dl_yf(tuple(tks),period)
     out={}
-    lr=bvl_data.download_prices([t.strip().upper() for t in tks if t.strip()],start,end,cid,csec,key)
     if lr is not None:
         for c in lr.columns:
             s=lr[c].dropna(); s.name=c; out[c]=s
@@ -507,28 +532,38 @@ def wdd(w,rets,bd,cap):
 def run_dl(period):
     tks=st.session_state.tickers; bks=st.session_state.benchmarks
     rf_tks=st.session_state.rf_tickers
-    # Se necesita al menos un activo (RV o RF de mercado) y un benchmark.
-    all_market = list(set(tks + rf_tks))  # sin duplicados
-    if not all_market or not bks:
-        st.session_state["_dl_error"]="Faltan activos o benchmark."
+    if not tks or not bks:
+        st.session_state["_dl_error"]="Faltan activos de renta variable o benchmark."
         return False
-    lr=dl_eq(tuple(all_market),period)
-    if lr is None or lr.empty:
-        st.session_state["_dl_error"]=f"No se obtuvieron datos de los activos: {', '.join(all_market)}."
+    # ── Renta variable: BVL ──
+    lr_eq=dl_eq(tuple(tks),period)
+    if lr_eq is None or lr_eq.empty:
+        st.session_state["_dl_error"]=f"No se obtuvieron datos BVL de: {', '.join(tks)}."
         return False
+    # ── Renta fija: yfinance (si hay bonos/ETFs) ──
+    lr_rf=None
+    if rf_tks:
+        lr_rf=dl_yf(tuple(rf_tks),period)
+        if lr_rf is None or lr_rf.empty:
+            st.session_state["_dl_error"]=f"No se obtuvieron datos yfinance de RF: {', '.join(rf_tks)}."
+            return False
+    # ── Combinar RV (BVL) + RF (yfinance) ──
+    if lr_rf is not None:
+        lr = lr_eq.join(lr_rf, how="outer")
+    else:
+        lr = lr_eq
+    # ── Benchmark: yfinance ──
     bd=dl_bk(tuple(bks),period)
     if not bd:
-        st.session_state["_dl_error"]=f"No se obtuvieron datos del benchmark: {', '.join(bks)}."
+        st.session_state["_dl_error"]=f"No se obtuvieron datos yfinance del benchmark: {', '.join(bks)}."
         return False
-    # Alinear por unión de fechas + forward-fill (tolerante a calendarios distintos
-    # entre EE.UU. y BVL). Antes se usaba intersección estricta, que podía vaciar todo.
+    # Alinear por unión de fechas + forward-fill (calendarios BVL vs EE.UU. distintos)
     idx_union = lr.index
     for v in bd.values():
         idx_union = idx_union.union(v.index)
     idx_union = idx_union.sort_values()
     lr = lr.reindex(idx_union).ffill().dropna(how="all")
     bd = {k: v.reindex(lr.index).ffill() for k, v in bd.items()}
-    # Quitar filas iniciales donde aún no hay ningún dato
     lr = lr.dropna(how="all")
     if lr.empty:
         st.session_state["_dl_error"]="Los datos quedaron vacíos tras alinear fechas."
@@ -778,16 +813,28 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
     with col_t: add_to=st.radio("Añadir como",["🔵 Renta variable","🟢 Renta fija","📊 Benchmark"],
                                 help="Elige el tipo de inversión antes de buscar. "
                                      "Las sugerencias se filtran según lo que elijas.")
-    with col_s: q=st.text_input("🔍 Buscar por nombre (escribe y presiona Enter)",
-                                placeholder="Escribe el nombre de una empresa: Apple, Microsoft, Coca-Cola…")
+    if add_to=="🔵 Renta variable":
+        with col_s: q=st.text_input("🔍 Buscar acción de la BVL (nombre o ticker)",
+                                    placeholder="Alicorp, Credicorp, ALICORC1, BAP…")
+    else:
+        _ph = ("Escribe el ticker del ETF de bonos: AGG, TLT, SHY…" if add_to=="🟢 Renta fija"
+               else "Escribe el ticker del índice: ^GSPC, SPY, EPU…")
+        with col_s: q=st.text_input(f"🔍 Buscar en Yahoo Finance ({add_to})", placeholder=_ph)
+
     if q.strip():
-        raw_res=search_yf(q.strip())
-        res=filter_search(raw_res, add_to)
-        if not res and raw_res:
-            st.caption(f"ℹ️ No se encontraron resultados compatibles con **{add_to}**. "
-                       f"Se encontraron {len(raw_res)} de otra clase.")
+        if add_to=="🔵 Renta variable":
+            # Renta variable: buscar en catálogo BVL
+            raw_res=search_yf(q.strip())
+            res=filter_search(raw_res, add_to)
+        else:
+            # RF y Benchmark: el ticker escrito se usa directo (yfinance)
+            _tk_manual=q.strip().upper()
+            res=[{"tk":_tk_manual,"nm":_NOMBRES_CONOCIDOS.get(_tk_manual,_tk_manual),
+                  "tp":"ETF" if add_to=="🟢 Renta fija" else "INDEX","ex":"Yahoo Finance"}]
+        if not res:
+            st.caption(f"ℹ️ Sin resultados para **{add_to}**.")
         if res:
-            st.caption("Resultados de la búsqueda (pasa el cursor para ver detalles, pulsa para agregar):")
+            st.caption("Resultados (pulsa para agregar):")
             # Traducción amigable del tipo de instrumento
             _tipo_map={"EQUITY":"Acción de empresa","ETF":"Fondo cotizado (ETF)",
                        "MUTUALFUND":"Fondo de inversión","INDEX":"Índice de mercado",
@@ -855,8 +902,8 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
                         st.session_state[_dest].append(tk); st.toast(f"✓ {nombre} agregado"); st.rerun()
 
     if not st.session_state.tickers and not st.session_state.rf_tickers:
-        st.info("👇 ¿Primera vez? Pulsa aquí para cargar una cartera de ejemplo con empresas conocidas "
-                "(Apple, Microsoft, Nvidia…) y explorar cómo funciona.")
+        st.info("👇 ¿Primera vez? Pulsa aquí para cargar una cartera de ejemplo con acciones "
+                "conocidas de la BVL (Alicorp, Credicorp, Ferreycorp…) y explorar cómo funciona.")
         if st.button("🚀 Cargar ejemplo",type="primary"):
             st.session_state.tickers=list(EJ); st.session_state.views=[]; st.session_state.rf_tickers=[]
 
