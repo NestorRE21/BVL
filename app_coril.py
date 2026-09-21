@@ -236,6 +236,10 @@ for k,v in {"tickers":[],"rf_tickers":[],"include_fico":True,"benchmarks":["^GSP
 # ═══════════════════ BACKEND (API BVL) ════════════════════════════════════════
 import bvl_data
 from bvl_catalog import BVL_SECTORS, BVL_TICKERS
+try:
+    from bvl_catalog import BVL_NAMES
+except ImportError:
+    BVL_NAMES = {}
 
 def _get_creds():
     try:
@@ -387,14 +391,17 @@ def acciones_enteras(pesos, precios, capital, fraccionables):
 
 @st.cache_data(show_spinner=False,ttl=300)
 def search_yf(q):
-    """Busca en el catálogo de la BVL por ticker o sector."""
+    """Busca en el catálogo de la BVL por ticker, nombre o sector."""
     q=q.strip().upper()
     if not q: return []
     out=[]
     for tk in BVL_TICKERS:
         sec=BVL_SECTORS.get(tk,"")
-        if q in tk or q in sec.upper():
-            out.append({"tk":tk,"nm":sec,"tp":"EQUITY","ex":"BVL"})
+        nombre=BVL_NAMES.get(tk,"")
+        # Coincidencia por ticker, nombre completo o sector
+        if q in tk or q in sec.upper() or (nombre and q in nombre.upper()):
+            display = nombre if nombre else sec
+            out.append({"tk":tk,"nm":display,"tp":"EQUITY","ex":"BVL"})
     return out[:20]
 
 # Keywords en nombre que indican renta fija
