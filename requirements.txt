@@ -1,5 +1,5 @@
 # Coril BL Optimizer — Streamlit Community Cloud (Python 3.14)
-# Fuente de datos: API BVL (ya no yfinance)
+# Fuente de datos híbrida: BVL (renta variable) + yfinance (renta fija y benchmark)
 streamlit>=1.40
 numpy>=2.3
 pandas>=2.3.3
@@ -7,3 +7,4 @@ scipy>=1.14
 scikit-learn>=1.6
 plotly>=5.24
 requests>=2.31
+yfinance>=0.2.50
