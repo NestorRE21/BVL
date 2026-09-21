@@ -168,17 +168,21 @@ with st.sidebar:
                     st.success(f"✓ Token obtenido ({tok[:15]}…)")
                     # Paso 3: descargar 1 ticker de prueba
                     test_tk = st.session_state.tickers[0] if st.session_state.tickers else "ALICORC1"
-                    s=bvl_data.get_history(test_tk,"20200101","20260101",tok,key)
-                    if s is None or len(s)==0:
-                        st.error(f"❌ Token OK pero sin datos para '{test_tk}'.")
-                        # Diagnóstico crudo de la respuesta
-                        dbg=bvl_data.debug_history(test_tk,"20200101","20260101",tok,key)
-                        st.write("**Detalle de la respuesta:**")
-                        st.json(dbg)
-                    else:
-                        st.success(f"✓ {test_tk}: {len(s)} días · "
-                                   f"último cierre ${s.iloc[-1]:.2f}")
-                        st.caption(f"Rango: {s.index.min().date()} → {s.index.max().date()}")
+                    st.write(f"**Probando rangos de fecha para '{test_tk}':**")
+                    # Probar rangos progresivos para encontrar el límite
+                    hoy = pd.Timestamp.today()
+                    for meses in [1, 3, 6, 12, 24, 36, 60]:
+                        ini = (hoy - pd.DateOffset(months=meses)).strftime("%Y%m%d")
+                        fin = hoy.strftime("%Y%m%d")
+                        dbg = bvl_data.debug_history(test_tk, ini, fin, tok, key)
+                        sc = dbg.get("status_code")
+                        bl = dbg.get("body_len", 0)
+                        if sc == 200 and bl > 0:
+                            st.success(f"✓ {meses} meses ({ini}→{fin}): {bl} registros")
+                        else:
+                            txt = dbg.get("texto_crudo", dbg.get("respuesta_completa", ""))
+                            st.error(f"❌ {meses} meses: status {sc} · {txt[:60]}")
+                            break
 
 # Descargar siempre con 15 años (fijo)
 OPT_PERIOD = "15y"
