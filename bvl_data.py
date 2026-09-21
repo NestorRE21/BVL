@@ -134,10 +134,38 @@ def debug_history(ticker: str, start: str, end: str, token: str, api_key: str) -
         return info
 
 
+def get_history_chunked(ticker, start, end, token, api_key, chunk_years=4):
+    """
+    Descarga histórico en tramos de chunk_years años y los une.
+    Evita el límite 'Period not allowed' de la API (máx ~5 años por llamada).
+    start/end en formato 'YYYYMMDD'.
+    """
+    start_dt = pd.Timestamp(start)
+    end_dt = pd.Timestamp(end)
+    trozos = []
+    cursor = start_dt
+    while cursor < end_dt:
+        tramo_fin = min(cursor + pd.DateOffset(years=chunk_years), end_dt)
+        s = get_history(ticker,
+                        cursor.strftime("%Y%m%d"),
+                        tramo_fin.strftime("%Y%m%d"),
+                        token, api_key)
+        if s is not None and len(s) > 0:
+            trozos.append(s)
+        cursor = tramo_fin + pd.Timedelta(days=1)
+    if not trozos:
+        return None
+    # Unir todos los tramos, quitar duplicados de fecha
+    full = pd.concat(trozos)
+    full = full[~full.index.duplicated(keep="last")].sort_index()
+    full.name = ticker
+    return full
+
+
 def download_prices(tickers, start, end, client_id, client_secret, api_key):
     """
     Descarga precios de varios tickers y devuelve un DataFrame de log-retornos
-    (fechas × tickers), replicando el formato que la app espera de yfinance.
+    (fechas × tickers). Usa descarga por tramos para superar el límite de la API.
     """
     token = get_token(client_id, client_secret)
     if token is None:
@@ -145,18 +173,15 @@ def download_prices(tickers, start, end, client_id, client_secret, api_key):
 
     series = {}
     for tk in tickers:
-        s = get_history(tk, start, end, token, api_key)
+        s = get_history_chunked(tk, start, end, token, api_key)
         if s is not None and len(s) > 5:
             series[tk] = s
 
     if not series:
         return None
 
-    # Combinar en DataFrame de precios, alinear por fecha
     prices = pd.DataFrame(series)
-    # Rellenar días sin cotización (feriados/baja liquidez) con forward-fill
     prices = prices.sort_index().ffill()
-    # Log-retornos
     log_ret = np.log(prices / prices.shift(1))
     log_ret = log_ret.replace([np.inf, -np.inf], np.nan).dropna(how="all")
     return log_ret
