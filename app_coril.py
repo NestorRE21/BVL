@@ -317,19 +317,29 @@ def fetch_sec(tickers):
 
 @st.cache_data(show_spinner=False,ttl=300)
 def fetch_precios(tickers):
-    """Precio actual de cada ticker vía API BVL (último cierre de la serie)."""
-    cid,csec,key=_get_creds()
+    """Precio actual de cada ticker. Tolerante a fallos: si no puede obtener
+    precios (módulo sin las funciones, API caída, etc.) devuelve {} y la app
+    simplemente no bloquea por precio."""
     out={}
-    if not cid: return out
-    tickers=[t.strip().upper() for t in tickers if t and not t.startswith("^")]
-    if not tickers: return out
-    end=pd.Timestamp.today(); start=(end-pd.DateOffset(months=2))
-    tok=bvl_data.get_token(cid,csec)
-    if not tok: return out
-    for t in tickers:
-        s=bvl_data.get_history(t,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"),tok,key)
-        if s is not None and len(s)>0:
-            out[t]=float(s.iloc[-1])
+    try:
+        cid,csec,key=_get_creds()
+        if not cid: return out
+        tickers=[t.strip().upper() for t in tickers if t and not t.startswith("^")]
+        if not tickers: return out
+        end=pd.Timestamp.today(); start=(end-pd.DateOffset(months=3))
+        if not (hasattr(bvl_data,"get_token") and hasattr(bvl_data,"get_history")):
+            return out
+        tok=bvl_data.get_token(cid,csec)
+        if not tok: return out
+        for t in tickers:
+            try:
+                s=bvl_data.get_history(t,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"),tok,key)
+                if s is not None and len(s)>0:
+                    out[t]=float(s.iloc[-1])
+            except Exception:
+                pass
+    except Exception:
+        pass
     return out
 
 def puede_agregar(nuevo_tk, capital):
