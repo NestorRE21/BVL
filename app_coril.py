@@ -170,8 +170,11 @@ with st.sidebar:
                     test_tk = st.session_state.tickers[0] if st.session_state.tickers else "ALICORC1"
                     s=bvl_data.get_history(test_tk,"20200101","20260101",tok,key)
                     if s is None or len(s)==0:
-                        st.error(f"❌ Token OK pero sin datos para '{test_tk}'. "
-                                 "Puede ser el ticker, el formato de fecha, o el x-api-key.")
+                        st.error(f"❌ Token OK pero sin datos para '{test_tk}'.")
+                        # Diagnóstico crudo de la respuesta
+                        dbg=bvl_data.debug_history(test_tk,"20200101","20260101",tok,key)
+                        st.write("**Detalle de la respuesta:**")
+                        st.json(dbg)
                     else:
                         st.success(f"✓ {test_tk}: {len(s)} días · "
                                    f"último cierre ${s.iloc[-1]:.2f}")
