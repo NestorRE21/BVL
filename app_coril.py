@@ -149,6 +149,34 @@ with st.sidebar:
         st.caption("Optimización siempre usa **15 años** de datos.")
         if st.button("🗑️ Limpiar caché",use_container_width=True): st.cache_data.clear(); st.toast("✓")
 
+        st.divider()
+        st.caption("**Diagnóstico BVL**")
+        if st.button("🔍 Probar conexión",use_container_width=True):
+            cid,csec,key=_get_creds()
+            # Paso 1: credenciales
+            if not cid or not csec or not key:
+                st.error("❌ Faltan credenciales en Secrets. Revisa "
+                         "BVL_CLIENT_ID, BVL_CLIENT_SECRET, BVL_API_KEY.")
+            else:
+                st.success(f"✓ Credenciales presentes (ID: {cid[:6]}…)")
+                # Paso 2: token
+                tok=bvl_data.get_token(cid,csec)
+                if not tok:
+                    st.error("❌ No se pudo obtener el token OAuth. "
+                             "Revisa Client ID/Secret o que la API esté activa.")
+                else:
+                    st.success(f"✓ Token obtenido ({tok[:15]}…)")
+                    # Paso 3: descargar 1 ticker de prueba
+                    test_tk = st.session_state.tickers[0] if st.session_state.tickers else "ALICORC1"
+                    s=bvl_data.get_history(test_tk,"20200101","20260101",tok,key)
+                    if s is None or len(s)==0:
+                        st.error(f"❌ Token OK pero sin datos para '{test_tk}'. "
+                                 "Puede ser el ticker, el formato de fecha, o el x-api-key.")
+                    else:
+                        st.success(f"✓ {test_tk}: {len(s)} días · "
+                                   f"último cierre ${s.iloc[-1]:.2f}")
+                        st.caption(f"Rango: {s.index.min().date()} → {s.index.max().date()}")
+
 # Descargar siempre con 15 años (fijo)
 OPT_PERIOD = "15y"
 
@@ -218,7 +246,8 @@ with tab1:
     if st.button("📥 Descargar datos",type="primary",use_container_width=True, disabled=not can_dl):
         with st.spinner("Descargando…"):
             if run_dl(OPT_PERIOD): st.success(f"✅ {st.session_state.data_range}")
-            else: st.error("Error. Verifica tickers.")
+            else: st.error("❌ No se descargaron datos. Abre **⚙️ Avanzado → 🔍 Probar "
+                           "conexión** en la barra lateral para ver dónde falla.")
 
 # ═══════════════════ TAB 2 ════════════════════════════════════════════════════
 with tab2:
