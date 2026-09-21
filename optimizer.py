@@ -971,3 +971,4 @@ def efficient_frontier(mu: pd.Series, cov: pd.DataFrame,
         return pd.DataFrame(columns=["ret", "vol"])
     df = pd.DataFrame(pts, columns=["ret", "vol"]).sort_values("vol")
     return df.reset_index(drop=True)
+    return df.reset_index(drop=True)
