@@ -1384,6 +1384,29 @@ if show_tab3:
                 bw[n] = np.exp(br.cumsum()) * capital
                 bdd[n] = bw[n] / bw[n].cummax() - 1
 
+            # ── Diagnóstico: peores días del portafolio y su causa ──
+            with st.expander("🔬 Diagnóstico: ¿qué causó las mayores caídas?"):
+                rr = st.session_state.returns  # retornos por activo (log)
+                rr_win = rr.loc[rr.index >= cutoff]
+                peores = pr.nsmallest(10)
+                filas = []
+                for fecha, ret_port in peores.items():
+                    # qué activo tuvo el peor retorno ese día
+                    if fecha in rr_win.index:
+                        dia = rr_win.loc[fecha].dropna()
+                        if len(dia):
+                            peor_act = dia.idxmin()
+                            filas.append({
+                                "Fecha": fecha.strftime("%Y-%m-%d"),
+                                "Caída portafolio": f"{np.exp(ret_port)-1:+.1%}",
+                                "Activo culpable": peor_act,
+                                "Su caída ese día": f"{np.exp(dia.min())-1:+.1%}",
+                            })
+                if filas:
+                    st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+                    st.caption("Compara estas fechas con TradingView. Si la caída del activo "
+                               "culpable NO aparece en TradingView, es un dato erróneo de la API.")
+
             fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.65,.35],vertical_spacing=.04,
                              subplot_titles=[f"Evolución de capital, últimos {cy} años (${capital:,.0f})","Drawdown"])
             fig.add_trace(go.Scatter(x=wl.index,y=wl.values,name="Portafolio",
