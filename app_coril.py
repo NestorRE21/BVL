@@ -1013,11 +1013,18 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
         for i,t in enumerate(st.session_state.tickers):
             c1,c2=st.columns([5,1])
             _n=nombre_activo(t)
-            _pr=_precios_rv.get(t)
+            _pr_usd=_precios_rv.get(t)               # ya en USD
+            _pr_raw=_precios_rv_raw.get(t)           # en moneda original
             _linea=f"**{_n}**" + (f"  ·  {t}" if _n!=t else "")
-            if _pr is not None:
+            if _pr_raw is not None:
                 _sim=moneda_activo(t)
-                _linea += f"<br><span style='color:#7a8ba0; font-size:0.8rem;'>Precio: {_sim}{_pr:,.2f}</span>"
+                if _sim=="S/":
+                    # mostrar soles y su equivalente en dólares
+                    _linea += (f"<br><span style='color:#7a8ba0; font-size:0.8rem;'>"
+                               f"Precio: S/{_pr_raw:,.2f}  (≈ ${_pr_usd:,.2f})</span>")
+                else:
+                    _linea += (f"<br><span style='color:#7a8ba0; font-size:0.8rem;'>"
+                               f"Precio: ${_pr_raw:,.2f}</span>")
             c1.markdown(_linea, unsafe_allow_html=True)
             if c2.button("✕",key=f"ra{i}"):
                 rm=st.session_state.tickers.pop(i)
@@ -1026,13 +1033,12 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
         if _precios_rv:
             _color = "#2ca02c" if _suma_rv<=capital else "#d6604d"
             _monedas_rv = set(BVL_CURRENCY.get(t,"USD") for t in st.session_state.tickers if t in _precios_rv)
-            _sim_port = "S/" if _monedas_rv=={"PEN"} else "$"
             st.markdown(f"<div style='margin-top:6px; padding-top:6px; border-top:1px solid #e6edf5; "
-                        f"font-size:0.85rem;'>Suma de precios: <b style='color:{_color};'>{_sim_port}{_suma_rv:,.2f}</b> "
+                        f"font-size:0.85rem;'>Suma en dólares: <b style='color:{_color};'>${_suma_rv:,.2f}</b> "
                         f"de ${capital:,.0f}</div>", unsafe_allow_html=True)
-            if len(_monedas_rv)>1:
-                st.caption("⚠️ Tu portafolio mezcla soles (S/) y dólares ($). La suma de "
-                           "precios es referencial; considera el tipo de cambio al invertir.")
+            if len(_monedas_rv)>1 or _monedas_rv=={"PEN"}:
+                st.caption(f"💱 Precios en soles convertidos a USD con tipo de cambio "
+                           f"S/{tipo_cambio_usdpen():.3f} por dólar (fuente: Yahoo Finance).")
     with lb:
         st.caption(f"**🟢 Renta fija ({len(st.session_state.rf_tickers)})**")
         # Toggle FICO
@@ -1322,7 +1328,9 @@ if show_tab3:
                        "al número exacto de acciones que comprarías con tu monto de "
                        f"**{usd(capital)}**.")
             _acc_rv=[a for a in wnorm.index if a in st.session_state.tickers]
-            _precios_plan=fetch_precios(tuple(_acc_rv)) if _acc_rv else {}
+            _precios_plan_raw=fetch_precios(tuple(_acc_rv)) if _acc_rv else {}
+            # Convertir a USD para que el plan de compra cuadre con el capital en USD
+            _precios_plan={t: precio_en_usd(t, p) for t, p in _precios_plan_raw.items() if p}
             if not _precios_plan:
                 st.info("No hay precios disponibles para calcular el plan de compra "
                         "(puede pasar si solo tienes renta fija o fondos).")
