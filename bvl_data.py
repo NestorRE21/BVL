@@ -93,6 +93,19 @@ def get_history(ticker: str, start: str, end: str,
         s.name = ticker
         # Eliminar duplicados de fecha (quedarse con el último)
         s = s[~s.index.duplicated(keep="last")]
+
+        # ── Filtro de outliers por mediana móvil ──
+        # Un precio que se desvía >25% de la mediana de su entorno (ventana 11
+        # días) es casi seguro un dato erróneo (operación mínima a precio raro,
+        # error de captura). Se reemplaza por la mediana local, dejando la
+        # tendencia real intacta. Esto imita el precio "ajustado" de TradingView.
+        if len(s) >= 11:
+            med = s.rolling(11, center=True, min_periods=3).median()
+            desv = (s - med).abs() / med.replace(0, np.nan)
+            outliers = desv > 0.25
+            if outliers.any():
+                s = s.mask(outliers, med)
+                s = s.ffill().bfill()
         return s
     except Exception as e:
         print(f"Error descargando {ticker}: {e}")
@@ -192,8 +205,10 @@ def ajustar_saltos(serie, umbral=0.30):
 
 def download_prices(tickers, start, end, client_id, client_secret, api_key):
     """
-    Descarga precios de varios tickers y devuelve un DataFrame de log-retornos
-    (fechas × tickers). Usa descarga por tramos para superar el límite de la API.
+    Descarga precios de varios tickers y devuelve un DataFrame de log-retornos.
+    Corrige splits individuales y elimina huecos de datos que afectan a todo
+    el mercado a la vez (fechas donde la API no tenía datos y el ffill inventó
+    un movimiento artificial simultáneo en todas las acciones).
     """
     token = get_token(client_id, client_secret)
     if token is None:
@@ -203,18 +218,38 @@ def download_prices(tickers, start, end, client_id, client_secret, api_key):
     for tk in tickers:
         s = get_history_chunked(tk, start, end, token, api_key)
         if s is not None and len(s) > 5:
-            # Ajustar saltos de nivel (splits/nominal/empalmes) sobre el precio
             series[tk] = ajustar_saltos(s, umbral=0.30)
 
     if not series:
         return None
 
-    prices = pd.DataFrame(series)
-    prices = prices.sort_index().ffill()
+    prices = pd.DataFrame(series).sort_index()
+
+    # Índice común solo con días donde AL MENOS la mitad de las acciones
+    # tienen dato REAL (no forward-fill). Esto elimina feriados peruanos y
+    # huecos de la API donde el ffill crearía movimientos artificiales.
+    tiene_dato = prices.notna()
+    min_activos = max(1, int(np.ceil(prices.shape[1] * 0.5)))
+    dias_validos = tiene_dato.sum(axis=1) >= min_activos
+    prices = prices.loc[dias_validos]
+
+    # Ahora sí, forward-fill los huecos individuales restantes
+    prices = prices.ffill()
+
     log_ret = np.log(prices / prices.shift(1))
     log_ret = log_ret.replace([np.inf, -np.inf], np.nan)
 
-    # Red de seguridad: si algún salto residual quedó, neutralizarlo
+    # Detectar movimientos anómalos SIMULTÁNEOS (mismo día, muchas acciones):
+    # si en un día >60% de las acciones se mueven más de ±20%, es un artefacto
+    # de datos, no un evento de mercado. Se neutraliza esa fila.
+    if log_ret.shape[1] >= 3:
+        anom = (log_ret.abs() > 0.20)
+        frac_anom = anom.sum(axis=1) / log_ret.shape[1]
+        dias_malos = frac_anom > 0.60
+        if dias_malos.any():
+            log_ret.loc[dias_malos] = 0.0
+
+    # Red de seguridad: saltos individuales residuales muy grandes
     log_ret = log_ret.mask(log_ret.abs() > 0.40, 0.0)
     log_ret = log_ret.dropna(how="all")
     return log_ret
