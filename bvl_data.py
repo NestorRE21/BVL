@@ -162,6 +162,34 @@ def get_history_chunked(ticker, start, end, token, api_key, chunk_years=4):
     return full
 
 
+def ajustar_saltos(serie, umbral=0.30):
+    """
+    Corrige saltos anómalos de nivel (splits, cambios de nominal, empalmes de
+    tramos) en una serie de PRECIOS. Cuando entre dos días consecutivos el
+    precio salta más de `umbral` (ej. 30%), reescala hacia atrás todo el
+    histórico anterior por el ratio del salto, dejando la serie continua.
+    Es el ajuste estándar retroactivo de splits.
+    """
+    s = serie.dropna().sort_index().copy()
+    if len(s) < 3:
+        return s
+    vals = s.values.astype(float)
+    n = len(vals)
+    # Recorrer de atrás hacia adelante detectando saltos
+    factor = 1.0
+    ajustada = vals.copy()
+    for i in range(n - 1, 0, -1):
+        prev = vals[i-1]; cur = vals[i]
+        if prev <= 0 or cur <= 0:
+            continue
+        ratio = cur / prev
+        # salto brusco (caída o subida) → probable split/nominal/empalme
+        if ratio < (1 - umbral) or ratio > 1/(1 - umbral):
+            # reescalar todo lo ANTERIOR al salto para empalmar
+            ajustada[:i] = ajustada[:i] * ratio
+    return pd.Series(ajustada, index=s.index, name=s.name)
+
+
 def download_prices(tickers, start, end, client_id, client_secret, api_key):
     """
     Descarga precios de varios tickers y devuelve un DataFrame de log-retornos
@@ -175,7 +203,8 @@ def download_prices(tickers, start, end, client_id, client_secret, api_key):
     for tk in tickers:
         s = get_history_chunked(tk, start, end, token, api_key)
         if s is not None and len(s) > 5:
-            series[tk] = s
+            # Ajustar saltos de nivel (splits/nominal/empalmes) sobre el precio
+            series[tk] = ajustar_saltos(s, umbral=0.30)
 
     if not series:
         return None
@@ -185,15 +214,7 @@ def download_prices(tickers, start, end, client_id, client_secret, api_key):
     log_ret = np.log(prices / prices.shift(1))
     log_ret = log_ret.replace([np.inf, -np.inf], np.nan)
 
-    # ── Limpiar saltos anómalos (splits no ajustados, errores de dato) ──
-    # Un retorno diario de magnitud > ~35% (|log-ret| > 0.30) en una acción
-    # casi siempre es un split o un precio erróneo, no un movimiento real.
-    # Se neutraliza (se pone 0) para no distorsionar la serie de capital.
-    UMBRAL = 0.30  # ~35% en un día
-    saltos = (log_ret.abs() > UMBRAL)
-    n_saltos = int(saltos.sum().sum())
-    if n_saltos > 0:
-        log_ret = log_ret.mask(saltos, 0.0)
-
+    # Red de seguridad: si algún salto residual quedó, neutralizarlo
+    log_ret = log_ret.mask(log_ret.abs() > 0.40, 0.0)
     log_ret = log_ret.dropna(how="all")
     return log_ret
