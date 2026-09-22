@@ -770,31 +770,36 @@ with st.sidebar:
 
         # ── Inversión ──
         st.markdown("### 💵 Monto a invertir")
-        _mc1,_mc2=st.columns([1,3])
-        with _mc1:
-            moneda_capital=st.selectbox("Moneda",["$ (USD)","S/ (PEN)"],
-                                        key="moneda_capital", label_visibility="collapsed")
-        _sim_cap = "S/" if moneda_capital.startswith("S/") else "$"
-        with _mc2:
-            capital=st.number_input(f"¿Cuánto quieres invertir? ({_sim_cap})",
-                              min_value=100,max_value=100_000_000,
-                              value=int(st.session_state.get("_capital",100_000)),step=1_000,
-                              label_visibility="collapsed",
-                              help=f"Escribe el monto que quieres simular, en {_sim_cap}.")
+        st.markdown("**¿En qué moneda quieres invertir?**")
+        moneda_capital=st.radio(
+            "Moneda del monto",
+            ["🇵🇪 Soles (S/)", "🇺🇸 Dólares (US$)"],
+            horizontal=True, key="moneda_capital", label_visibility="collapsed")
+        _sim_cap = "S/" if "Soles" in moneda_capital else "$"
+        _nombre_moneda = "soles" if _sim_cap == "S/" else "dólares"
+        capital=st.number_input(
+            f"¿Cuánto quieres invertir en {_nombre_moneda}?",
+            min_value=100, max_value=100_000_000,
+            value=int(st.session_state.get("_capital",100_000)), step=1_000,
+            help=f"Escribe el monto total que quieres invertir, en {_nombre_moneda}.")
         st.session_state._capital=capital
         st.session_state._moneda_capital=_sim_cap
-        # Capital convertido a USD para comparaciones internas (precios se manejan en USD)
+        # Capital convertido a USD para comparaciones internas (precios en USD)
         if _sim_cap == "S/":
             capital_usd = capital / tipo_cambio_usdpen()
         else:
             capital_usd = capital
         st.session_state._capital_usd = capital_usd
-        st.markdown(f"<div style='text-align:center; font-size:1.5rem; font-weight:800; color:#1a3a5c; "
-                    f"margin-top:2px;'>{_sim_cap}{capital:,.0f}</div>",unsafe_allow_html=True)
-        if _sim_cap == "S/":
-            st.caption(f"<div style='text-align:center; color:#7a8ba0; font-size:0.85rem;'>"
-                       f"≈ ${capital_usd:,.0f} (T.C. S/{tipo_cambio_usdpen():.3f})</div>",
-                       unsafe_allow_html=True)
+        # Tarjeta grande con el monto y su equivalente
+        _equiv = (f"≈ US$ {capital_usd:,.0f}" if _sim_cap=="S/"
+                  else f"≈ S/ {capital*tipo_cambio_usdpen():,.0f}")
+        st.markdown(
+            f"<div style='text-align:center; background:#f0f5fb; border-radius:12px; "
+            f"padding:14px; margin-top:8px;'>"
+            f"<div style='font-size:2rem; font-weight:800; color:#1a3a5c;'>{_sim_cap} {capital:,.0f}</div>"
+            f"<div style='color:#7a8ba0; font-size:0.9rem; margin-top:2px;'>{_equiv} "
+            f"· T.C. S/{tipo_cambio_usdpen():.3f}</div></div>",
+            unsafe_allow_html=True)
         st.divider()
         with st.expander("⚙️ Detalles avanzados"):
             _p=RiskProfile.for_split(eq_t,fi_t)
@@ -1535,26 +1540,59 @@ if show_tab3:
                     st.caption("Compara estas fechas con TradingView. Si la caída del activo "
                                "culpable NO aparece en TradingView, es un dato erróneo de la API.")
 
-            fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.65,.35],vertical_spacing=.04,
-                             subplot_titles=[f"Evolución de capital, últimos {cy} años (${capital:,.0f})","Drawdown"])
-            fig.add_trace(go.Scatter(x=wl.index,y=wl.values,name="Portafolio",
-                                    line=dict(color=C_RV,width=2.5)),row=1,col=1)
+            # ── Estilo financiero profesional ──
+            _sm = st.session_state.get("_moneda_capital","$")
+            COL_PORT   = "#0B4F6C"   # azul petróleo profundo (portafolio)
+            COL_PORT_F = "rgba(11,79,108,0.12)"  # área rellena
+            COL_BMKS   = ["#C9A227","#8B8B8B","#B07156","#5B8A72","#8C6BAE"]  # dorado, gris, terracota...
+            COL_DD     = "#B23A48"   # rojo vino para drawdown
+
+            fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.7,.3],
+                             vertical_spacing=.06,
+                             subplot_titles=[
+                                 f"<b>Crecimiento de tu inversión</b>  ·  {_sm} {capital:,.0f} inicial  ·  últimos {cy} años",
+                                 "<b>Caídas desde máximos (drawdown)</b>"])
+
+            # Portafolio: línea + área rellena
+            fig.add_trace(go.Scatter(x=wl.index,y=wl.values,name="Tu portafolio",
+                                    line=dict(color=COL_PORT,width=3),
+                                    fill="tozeroy",fillcolor=COL_PORT_F,
+                                    hovertemplate=f"%{{x|%b %Y}}<br><b>{_sm} %{{y:,.0f}}</b><extra></extra>"),
+                          row=1,col=1)
+            # Benchmarks: líneas finas punteadas
             for i,(n,v) in enumerate(bw.items()):
                 fig.add_trace(go.Scatter(x=v.index,y=v.values,name=nombre_activo(n),
-                    line=dict(color=BC[i%len(BC)],dash="dash",width=1.5)),row=1,col=1)
-            fig.add_trace(go.Scatter(x=dd.index,y=dd.values,name="DD Portafolio",
-                                    fill="tozeroy",fillcolor="rgba(214,96,77,0.3)",
-                                    line=dict(color=C_OPT,width=1.5)),row=2,col=1)
-            for i,(n,ddb) in enumerate(bdd.items()):
-                fig.add_trace(go.Scatter(x=ddb.index,y=ddb.values,name=f"DD {n}",
-                    line=dict(color=BC[i%len(BC)],dash="dot",width=1)),row=2,col=1)
+                    line=dict(color=COL_BMKS[i%len(COL_BMKS)],dash="dot",width=1.6),
+                    hovertemplate=f"%{{x|%b %Y}}<br>%{{y:,.0f}}<extra>{nombre_activo(n)}</extra>"),
+                    row=1,col=1)
+            # Drawdown portafolio (área)
+            fig.add_trace(go.Scatter(x=dd.index,y=dd.values,name="Caída del portafolio",
+                                    fill="tozeroy",fillcolor="rgba(178,58,72,0.18)",
+                                    line=dict(color=COL_DD,width=2),
+                                    hovertemplate="%{x|%b %Y}<br><b>%{y:.1%}</b><extra></extra>"),
+                          row=2,col=1)
             _prof=RiskProfile.for_split(eq_t,fi_t)
-            fig.add_hline(y=-_prof.max_drawdown,line_dash="dash",line_color="black",
-                         row=2,col=1,annotation_text=f"Límite {_prof.max_drawdown:.0%}")
-            fig.update_yaxes(tickprefix="$",tickformat=",.0f",row=1,col=1)
-            fig.update_yaxes(tickformat=".0%",row=2,col=1)
-            fig.update_layout(height=520,margin=dict(l=0,r=0,t=25,b=0),
-                             legend=dict(orientation="h",y=-0.08,font=dict(size=10)))
+            fig.add_hline(y=-_prof.max_drawdown,line_dash="dash",line_color="#B23A48",
+                         line_width=1.2,row=2,col=1,
+                         annotation_text=f"Límite tolerado {_prof.max_drawdown:.0%}",
+                         annotation_font=dict(size=10,color="#B23A48"))
+
+            # Ejes con estilo limpio
+            fig.update_yaxes(tickprefix=f"{_sm} ",tickformat=",.0f",row=1,col=1,
+                            gridcolor="#EDF1F5",zeroline=False)
+            fig.update_yaxes(tickformat=".0%",row=2,col=1,gridcolor="#EDF1F5",zeroline=False)
+            fig.update_xaxes(gridcolor="#EDF1F5",row=1,col=1)
+            fig.update_xaxes(gridcolor="#EDF1F5",row=2,col=1)
+            fig.update_layout(
+                height=540,margin=dict(l=0,r=0,t=48,b=0),
+                plot_bgcolor="white",paper_bgcolor="white",
+                font=dict(family="Georgia, 'Times New Roman', serif",size=12,color="#2c3e50"),
+                legend=dict(orientation="h",yanchor="bottom",y=-0.14,xanchor="center",x=0.5,
+                           font=dict(size=11),bgcolor="rgba(0,0,0,0)"),
+                hovermode="x unified")
+            # Títulos de subplots con la fuente serif
+            for ann in fig.layout.annotations:
+                ann.font = dict(family="Georgia, serif",size=13,color="#1a3a5c")
             st.plotly_chart(fig,use_container_width=True,key="chart_evol_hist",config={"displayModeBar":False})
 
             # Métricas históricas del rango visible
