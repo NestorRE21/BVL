@@ -574,12 +574,20 @@ def run_dl(period):
     if not bd:
         st.session_state["_dl_error"]=f"No se obtuvieron datos yfinance del benchmark: {', '.join(bks)}."
         return False
-    # Alinear por unión de fechas + forward-fill (calendarios BVL vs EE.UU. distintos)
-    idx_union = lr.index
-    for v in bd.values():
-        idx_union = idx_union.union(v.index)
-    idx_union = idx_union.sort_values()
-    lr = lr.reindex(idx_union).ffill().dropna(how="all")
+
+    # Rango REAL de las acciones (BVL+RF): desde que TODAS tienen datos.
+    # Esto evita "estirar" a los 15 años del benchmark cuando una acción
+    # solo cotiza hace pocos años (sería engañoso mostrar historia inexistente).
+    primer_dato = lr.apply(lambda col: col.first_valid_index()).max()  # el más tardío
+    ultimo_dato = lr.apply(lambda col: col.last_valid_index()).min()   # el más temprano
+    if primer_dato is None or ultimo_dato is None or primer_dato >= ultimo_dato:
+        st.session_state["_dl_error"]="Las acciones no tienen suficiente historia común."
+        return False
+    lr = lr.loc[primer_dato:ultimo_dato]
+
+    # Alinear el benchmark al rango REAL de las acciones (calendarios distintos → ffill)
+    idx = lr.index
+    lr = lr.ffill().dropna(how="all")
     bd = {k: v.reindex(lr.index).ffill() for k, v in bd.items()}
     lr = lr.dropna(how="all")
     if lr.empty:
@@ -591,7 +599,8 @@ def run_dl(period):
     ok=[t for t in tks if t in lr.columns]
     s=fetch_sec(tuple(ok)); s[FICO_TK]=FICO.sector; st.session_state.sectors=s
     st.session_state.last_period=period
-    st.session_state.data_range=f"{lr.index.min().strftime('%Y-%m-%d')} → {lr.index.max().strftime('%Y-%m-%d')}"
+    _n_anios = (lr.index.max() - lr.index.min()).days / 365.25
+    st.session_state.data_range=f"{lr.index.min().strftime('%Y-%m-%d')} → {lr.index.max().strftime('%Y-%m-%d')} (~{_n_anios:.1f} años reales)"
     st.session_state["_dl_error"]=None
     for k in list(st.session_state.keys()):
         if k.startswith("s_"): del st.session_state[k]
@@ -680,6 +689,31 @@ with st.sidebar:
             st.caption(f"Beta objetivo: {_p.beta_min:.2f} a {_p.beta_max:.2f}")
             st.caption(f"Caída máxima tolerada: {_p.max_drawdown:.0%}")
             st.caption("Los cálculos usan datos diarios (hasta 15 años de historia).")
+            if st.button("🗑️ Limpiar caché de datos", use_container_width=True):
+                st.cache_data.clear(); st.toast("Caché limpiado ✓")
+
+            # Diagnóstico de calidad de datos
+            if st.session_state.get("returns") is not None:
+                st.divider()
+                st.caption("**Diagnóstico: días de mayor movimiento por activo**")
+                rr = st.session_state.returns
+                filas = []
+                for col in rr.columns:
+                    s = rr[col].dropna()
+                    if len(s) == 0: continue
+                    # 3 mayores movimientos absolutos
+                    top = s.abs().nlargest(3)
+                    for fecha, _ in top.items():
+                        filas.append({
+                            "Activo": col,
+                            "Fecha": fecha.strftime("%Y-%m-%d"),
+                            "Retorno día": f"{np.exp(s.loc[fecha])-1:+.1%}",
+                        })
+                if filas:
+                    dfd = pd.DataFrame(filas).sort_values("Retorno día")
+                    st.dataframe(dfd, use_container_width=True, hide_index=True, height=200)
+                    st.caption("Si ves un movimiento sospechosamente grande (>±25%) en una "
+                               "fecha concreta, puede ser un split o error de dato de esa acción.")
 
 # Descargar siempre con 15 años (fijo)
 OPT_PERIOD = "15y"
