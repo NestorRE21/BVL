@@ -183,5 +183,17 @@ def download_prices(tickers, start, end, client_id, client_secret, api_key):
     prices = pd.DataFrame(series)
     prices = prices.sort_index().ffill()
     log_ret = np.log(prices / prices.shift(1))
-    log_ret = log_ret.replace([np.inf, -np.inf], np.nan).dropna(how="all")
+    log_ret = log_ret.replace([np.inf, -np.inf], np.nan)
+
+    # ── Limpiar saltos anómalos (splits no ajustados, errores de dato) ──
+    # Un retorno diario de magnitud > ~35% (|log-ret| > 0.30) en una acción
+    # casi siempre es un split o un precio erróneo, no un movimiento real.
+    # Se neutraliza (se pone 0) para no distorsionar la serie de capital.
+    UMBRAL = 0.30  # ~35% en un día
+    saltos = (log_ret.abs() > UMBRAL)
+    n_saltos = int(saltos.sum().sum())
+    if n_saltos > 0:
+        log_ret = log_ret.mask(saltos, 0.0)
+
+    log_ret = log_ret.dropna(how="all")
     return log_ret
