@@ -240,6 +240,48 @@ try:
     from bvl_catalog import BVL_NAMES
 except ImportError:
     BVL_NAMES = {}
+try:
+    from bvl_catalog import BVL_CURRENCY
+except ImportError:
+    BVL_CURRENCY = {}
+
+def moneda_activo(tk):
+    """Devuelve 'S/' para soles (PEN) o '$' para dólares (USD)."""
+    cur = BVL_CURRENCY.get(tk, "USD")
+    return "S/" if cur == "PEN" else "$"
+
+def simbolo_moneda_portafolio(tickers):
+    """Símbolo de moneda dominante del portafolio (para totales)."""
+    curs = [BVL_CURRENCY.get(t, "USD") for t in tickers if t != FICO_TK]
+    if curs and all(c == "PEN" for c in curs):
+        return "S/"
+    return "$"
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def tipo_cambio_usdpen():
+    """Tipo de cambio USD/PEN desde yfinance (PEN=X): cuántos soles vale 1 USD.
+    Default 3.75 si no se puede obtener."""
+    try:
+        import yfinance as yf
+        d = yf.download("PEN=X", period="5d", interval="1d",
+                        auto_adjust=True, progress=False)
+        if d is not None and not d.empty:
+            px = d["Close"]
+            if hasattr(px, "iloc"):
+                val = float(px.iloc[-1]) if px.ndim==1 else float(px.iloc[-1,0])
+                if 2.0 < val < 6.0:  # rango sensato para USD/PEN
+                    return val
+    except Exception:
+        pass
+    return 3.75
+
+def precio_en_usd(tk, precio):
+    """Convierte el precio de un activo a USD según su moneda."""
+    if precio is None:
+        return None
+    if BVL_CURRENCY.get(tk, "USD") == "PEN":
+        return precio / tipo_cambio_usdpen()
+    return precio
 
 def _get_creds():
     try:
@@ -351,8 +393,10 @@ def puede_agregar(nuevo_tk, capital):
     actuales = list(st.session_state.tickers)
     todos = actuales + ([nuevo_tk] if nuevo_tk not in actuales else [])
     precios = fetch_precios(tuple(todos))
-    suma_actual = sum(precios.get(t,0) for t in actuales)
-    precio_nuevo = precios.get(nuevo_tk)
+    # Convertir todo a USD (el capital está en USD) según la moneda de cada activo
+    suma_actual = sum(precio_en_usd(t, precios.get(t,0)) or 0 for t in actuales)
+    precio_nuevo_raw = precios.get(nuevo_tk)
+    precio_nuevo = precio_en_usd(nuevo_tk, precio_nuevo_raw)
     if precio_nuevo is None:
         # Sin precio disponible → permitir (no podemos verificar)
         return True, None, suma_actual, suma_actual
@@ -960,8 +1004,9 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
 
     # ── Listas: RV + RF + Benchmarks ─────────────────────────────────────
     # Precios actuales de las acciones de RV (para mostrar como guía)
-    _precios_rv = fetch_precios(tuple(st.session_state.tickers)) if st.session_state.tickers else {}
-    _suma_rv = sum(_precios_rv.values())
+    _precios_rv_raw = fetch_precios(tuple(st.session_state.tickers)) if st.session_state.tickers else {}
+    _precios_rv = {t: precio_en_usd(t, p) for t, p in _precios_rv_raw.items()}
+    _suma_rv = sum(v for v in _precios_rv.values() if v)
     la,lb,lc=st.columns(3)
     with la:
         st.caption(f"**🔵 Renta variable ({len(st.session_state.tickers)})**")
@@ -971,7 +1016,8 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
             _pr=_precios_rv.get(t)
             _linea=f"**{_n}**" + (f"  ·  {t}" if _n!=t else "")
             if _pr is not None:
-                _linea += f"<br><span style='color:#7a8ba0; font-size:0.8rem;'>Precio: ${_pr:,.2f}</span>"
+                _sim=moneda_activo(t)
+                _linea += f"<br><span style='color:#7a8ba0; font-size:0.8rem;'>Precio: {_sim}{_pr:,.2f}</span>"
             c1.markdown(_linea, unsafe_allow_html=True)
             if c2.button("✕",key=f"ra{i}"):
                 rm=st.session_state.tickers.pop(i)
@@ -979,9 +1025,14 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
                 st.rerun()
         if _precios_rv:
             _color = "#2ca02c" if _suma_rv<=capital else "#d6604d"
+            _monedas_rv = set(BVL_CURRENCY.get(t,"USD") for t in st.session_state.tickers if t in _precios_rv)
+            _sim_port = "S/" if _monedas_rv=={"PEN"} else "$"
             st.markdown(f"<div style='margin-top:6px; padding-top:6px; border-top:1px solid #e6edf5; "
-                        f"font-size:0.85rem;'>Suma de precios: <b style='color:{_color};'>${_suma_rv:,.2f}</b> "
+                        f"font-size:0.85rem;'>Suma de precios: <b style='color:{_color};'>{_sim_port}{_suma_rv:,.2f}</b> "
                         f"de ${capital:,.0f}</div>", unsafe_allow_html=True)
+            if len(_monedas_rv)>1:
+                st.caption("⚠️ Tu portafolio mezcla soles (S/) y dólares ($). La suma de "
+                           "precios es referencial; considera el tipo de cambio al invertir.")
     with lb:
         st.caption(f"**🟢 Renta fija ({len(st.session_state.rf_tickers)})**")
         # Toggle FICO
