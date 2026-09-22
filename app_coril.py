@@ -770,13 +770,31 @@ with st.sidebar:
 
         # ── Inversión ──
         st.markdown("### 💵 Monto a invertir")
-        capital=st.number_input("¿Cuánto quieres invertir? (USD)",min_value=100,max_value=100_000_000,
-                          value=int(st.session_state.get("_capital",100_000)),step=1_000,
-                          label_visibility="collapsed",
-                          help="Escribe el monto que quieres simular, en dólares.")
+        _mc1,_mc2=st.columns([1,3])
+        with _mc1:
+            moneda_capital=st.selectbox("Moneda",["$ (USD)","S/ (PEN)"],
+                                        key="moneda_capital", label_visibility="collapsed")
+        _sim_cap = "S/" if moneda_capital.startswith("S/") else "$"
+        with _mc2:
+            capital=st.number_input(f"¿Cuánto quieres invertir? ({_sim_cap})",
+                              min_value=100,max_value=100_000_000,
+                              value=int(st.session_state.get("_capital",100_000)),step=1_000,
+                              label_visibility="collapsed",
+                              help=f"Escribe el monto que quieres simular, en {_sim_cap}.")
         st.session_state._capital=capital
+        st.session_state._moneda_capital=_sim_cap
+        # Capital convertido a USD para comparaciones internas (precios se manejan en USD)
+        if _sim_cap == "S/":
+            capital_usd = capital / tipo_cambio_usdpen()
+        else:
+            capital_usd = capital
+        st.session_state._capital_usd = capital_usd
         st.markdown(f"<div style='text-align:center; font-size:1.5rem; font-weight:800; color:#1a3a5c; "
-                    f"margin-top:2px;'>${capital:,.0f}</div>",unsafe_allow_html=True)
+                    f"margin-top:2px;'>{_sim_cap}{capital:,.0f}</div>",unsafe_allow_html=True)
+        if _sim_cap == "S/":
+            st.caption(f"<div style='text-align:center; color:#7a8ba0; font-size:0.85rem;'>"
+                       f"≈ ${capital_usd:,.0f} (T.C. S/{tipo_cambio_usdpen():.3f})</div>",
+                       unsafe_allow_html=True)
         st.divider()
         with st.expander("⚙️ Detalles avanzados"):
             _p=RiskProfile.for_split(eq_t,fi_t)
@@ -1000,7 +1018,7 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
                         st.session_state.asset_names[tk]=_nombre   # recordar el nombre real
                         if add_to=="🔵 Renta variable":
                             if tk not in st.session_state.tickers:
-                                _ok,_pn,_sa,_tot=puede_agregar(tk,capital)
+                                _ok,_pn,_sa,_tot=puede_agregar(tk,st.session_state.get('_capital_usd',capital))
                                 if _ok:
                                     st.session_state.tickers.append(tk); st.toast(f"✓ {_nombre} agregado")
                                 else:
@@ -1039,7 +1057,7 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
                              key=f"pop_{_dest}_{tk}",use_container_width=True,disabled=ya):
                     st.session_state.asset_names[tk]=nombre
                     if _dest=="tickers":
-                        _ok,_pn,_sa,_tot=puede_agregar(tk,capital)
+                        _ok,_pn,_sa,_tot=puede_agregar(tk,st.session_state.get('_capital_usd',capital))
                         if _ok:
                             st.session_state[_dest].append(tk); st.toast(f"✓ {nombre} agregado"); st.rerun()
                         else:
@@ -1208,29 +1226,6 @@ if show_tab3:
                    "de renta fija ni activaste el Fondo de inversión. Agrega uno en la pestaña "
                    "**Activos**, o sube la renta variable a 100% para un portafolio solo de renta variable.")
     else:
-        # ── Selector de moneda de análisis (solo si hay activos en soles) ──
-        if st.session_state.get("hay_pen") and st.session_state.get("returns_usd") is not None:
-            _cm1, _cm2 = st.columns([2,3])
-            with _cm1:
-                moneda_vista = st.radio(
-                    "Moneda de análisis",
-                    ["Soles (S/)", "Dólares ($)"],
-                    horizontal=True, key="moneda_vista",
-                    help="Cómo medir los retornos. En dólares se incorpora el efecto "
-                         "del tipo de cambio USD/PEN (método CFA).")
-            # Reasignar la serie activa según la elección
-            if moneda_vista.startswith("Dólares"):
-                st.session_state.returns = st.session_state.returns_usd
-            else:
-                st.session_state.returns = st.session_state.returns_full
-            with _cm2:
-                if not st.session_state.get("fx_disponible", True):
-                    st.caption("⚠️ No se pudo obtener el tipo de cambio; se usa valor por defecto.")
-                else:
-                    st.caption(f"💱 Tipo de cambio USD/PEN de Yahoo Finance. En dólares, el "
-                               f"retorno combina el movimiento de la acción y del sol frente "
-                               f"al dólar (R = (1+R_activo)(1+R_cambio)−1, fórmula CFA).")
-
         if AUTO:
             # Modo automático: optimiza al entrar (o al pulsar recalcular).
             # Auto-optimización: recalcula solo si cambió algún input relevante.
@@ -1412,7 +1407,7 @@ if show_tab3:
                 # Fraccionables: Fondo de inversión + ETFs de renta fija (aceptan monto libre)
                 _fraccionables=set(st.session_state.rf_tickers) | {FICO_TK}
                 _pesos={a: float(wnorm[a]) for a in wnorm.index}
-                _unid,_mfrac,_efectivo,_gastado=acciones_enteras(_pesos,_precios_plan,capital,_fraccionables)
+                _unid,_mfrac,_efectivo,_gastado=acciones_enteras(_pesos,_precios_plan,st.session_state.get('_capital_usd',capital),_fraccionables)
 
                 st.markdown("**🔵 Acciones (se compran por unidades enteras)**")
                 _filas_acc=[]
