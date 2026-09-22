@@ -224,8 +224,20 @@ C_RV,C_RF,C_OPT = "#2E5E8C","#2CA02C","#D6604D"
 BC = ["#888","#E377C2","#FF7F0E","#9467BD","#17BECF"]
 
 def usd(x):
-    """Formatea monto en USD con el signo $ escapado para markdown de Streamlit."""
-    return f"\\${x:,.0f}"
+    """Formatea un monto con el símbolo de la moneda elegida por el usuario
+    (S/ o $), escapado para markdown de Streamlit. El monto ya está en esa
+    moneda porque 'capital' se maneja en la moneda seleccionada."""
+    try:
+        sim = st.session_state.get("_moneda_capital", "$")
+    except Exception:
+        sim = "$"
+    sim_esc = "S/" if sim == "S/" else "\\$"
+    return f"{sim_esc}{x:,.0f}"
+
+def money(x):
+    """Igual que usd() pero sin escapar (para f-strings normales, no markdown)."""
+    sim = st.session_state.get("_moneda_capital", "$") if hasattr(st,"session_state") else "$"
+    return f"{sim}{x:,.0f}"
 
 for k,v in {"tickers":[],"rf_tickers":[],"include_fico":True,"benchmarks":["^GSPC"],"views":[],"optimized":False,"result":None,
             "manual_weights":None,"returns":None,"bench_rets":None,"betas":None,"sectors":None,
@@ -1416,24 +1428,27 @@ if show_tab3:
 
                 st.markdown("**🔵 Acciones (se compran por unidades enteras)**")
                 _filas_acc=[]
-                _monto_optimo_acc=0.0   # costo de comprar el óptimo completo (acciones)
-                _monto_alcanza_acc=0.0  # costo de lo que sí alcanza
+                _monto_optimo_acc=0.0   # costo de comprar el óptimo completo (acciones), en USD
+                _monto_alcanza_acc=0.0  # costo de lo que sí alcanza, en USD
+                _sm_a = st.session_state.get("_moneda_capital","$")
+                _fx_a = tipo_cambio_usdpen() if _sm_a=="S/" else 1.0
+                _cap_usd_a = st.session_state.get('_capital_usd',capital)
                 for a in wnorm.index:
                     if a not in _precios_plan: continue
-                    _precio=_precios_plan[a]
-                    _obj_monto=_pesos[a]*capital            # dinero que pide el óptimo
-                    _ideal=_obj_monto/_precio                # acciones ideales (con decimales)
-                    _necesarias=max(1,round(_ideal)) if _pesos[a]>1e-4 else 0  # óptimo en enteros
-                    _alcanzan=_unid.get(a,0)                 # las que caben con tu monto
+                    _precio=_precios_plan[a]                  # precio en USD
+                    _obj_monto=_pesos[a]*_cap_usd_a            # dinero que pide el óptimo (USD)
+                    _ideal=_obj_monto/_precio                 # acciones ideales (con decimales)
+                    _necesarias=max(1,round(_ideal)) if _pesos[a]>1e-4 else 0
+                    _alcanzan=_unid.get(a,0)
                     _monto_optimo_acc += _necesarias*_precio
                     _monto_alcanza_acc += _alcanzan*_precio
                     _filas_acc.append({
                         "Empresa": nombre_activo(a),
-                        "Precio x acción": f"${_precio:,.2f}",
+                        "Precio x acción": money(_precio*_fx_a),
                         "Necesarias (óptimo)": f"{_necesarias}",
                         "Te alcanzan": f"{_alcanzan}",
                         "Faltan por comprar": f"{max(0,_necesarias-_alcanzan)}",
-                        "Costo del óptimo": f"${_necesarias*_precio:,.0f}",
+                        "Costo del óptimo": money(_necesarias*_precio*_fx_a),
                     })
                 if _filas_acc:
                     st.dataframe(pd.DataFrame(_filas_acc),use_container_width=True,hide_index=True)
@@ -1443,16 +1458,20 @@ if show_tab3:
                                "diferencia que te queda pendiente por falta de dinero.")
 
                 # Fraccionables (Fondo / RF): se muestran aparte porque sí aceptan montos exactos
+                _sm_f = st.session_state.get("_moneda_capital","$")
+                _fx_f = tipo_cambio_usdpen() if _sm_f=="S/" else 1.0
+                _cap_usd_f = st.session_state.get('_capital_usd',capital)
                 _filas_frac=[]
                 _monto_frac=0.0
                 for a in wnorm.index:
                     if a in _precios_plan: continue
-                    _m_obj=_pesos[a]*capital          # monto óptimo para este instrumento
+                    _m_obj=_pesos[a]*_cap_usd_f          # monto óptimo en USD
                     _monto_frac += _m_obj
+                    _m_mostrar=(_mfrac.get(a,_m_obj))*_fx_f   # convertir a moneda usuario
                     _filas_frac.append({
                         "Instrumento": nombre_activo(a),
                         "Objetivo %": f"{_pesos[a]:.1%}",
-                        "Monto a invertir": f"${_mfrac.get(a,_m_obj):,.0f}",
+                        "Monto a invertir": money(_m_mostrar),
                     })
                 if _filas_frac:
                     st.markdown("**🟢 Renta fija y fondos (se invierte el monto exacto, sin comprar unidades)**")
@@ -1469,28 +1488,36 @@ if show_tab3:
                     _monto_minimo = _monto_optimo_acc + _monto_frac
 
                 st.markdown("**Resumen**")
-                _invertido=capital-_efectivo
+                # Los montos del plan están en USD (precios internos en USD).
+                # Convertir de vuelta a la moneda elegida por el usuario para mostrar.
+                _sm = st.session_state.get("_moneda_capital","$")
+                _fx = tipo_cambio_usdpen() if _sm=="S/" else 1.0
+                _invertido_usd=st.session_state.get('_capital_usd',capital)-_efectivo
+                _inv_disp=_invertido_usd*_fx
+                _gast_disp=_gastado*_fx
+                _efec_disp=_efectivo*_fx
                 pcol1,pcol2,pcol3=st.columns(3)
-                pcol1.metric("💰 Total invertido",f"${_invertido:,.0f}",delta=f"{_invertido/capital:.0%} de tu monto")
-                pcol2.metric("🏦 En acciones",f"${_gastado:,.0f}")
-                pcol3.metric("💵 Te sobra (efectivo)",f"${_efectivo:,.0f}",
-                             delta=None if _efectivo<1 else f"{_efectivo/capital:.1%}",delta_color="off")
+                pcol1.metric("💰 Total invertido",money(_inv_disp),delta=f"{_invertido_usd/max(st.session_state.get('_capital_usd',capital),1):.0%} de tu monto")
+                pcol2.metric("🏦 En acciones",money(_gast_disp))
+                pcol3.metric("💵 Te sobra (efectivo)",money(_efec_disp),
+                             delta=None if _efectivo<1 else f"{_efectivo/max(st.session_state.get('_capital_usd',capital),1):.1%}",delta_color="off")
 
-                # Mensaje sobre el monto mínimo
-                if _monto_minimo > capital*1.08:   # margen del 8% para redondeos de acciones enteras
-                    _falta_dinero=_monto_minimo-capital
+                # Mensaje sobre el monto mínimo (en moneda del usuario)
+                _cap_usd=st.session_state.get('_capital_usd',capital)
+                if _monto_minimo > _cap_usd*1.08:
+                    _falta_usd=_monto_minimo-_cap_usd
                     st.warning(
                         f"📌 **Para armar el portafolio óptimo completo necesitas al menos "
-                        f"{usd(_monto_minimo)}.**\n\n"
-                        f"Con tu monto actual de {usd(capital)} te faltan aproximadamente "
-                        f"**{usd(_falta_dinero)}** para comprar todas las acciones necesarias "
+                        f"{money(_monto_minimo*_fx)}.**\n\n"
+                        f"Con tu monto actual de {money(capital)} te faltan aproximadamente "
+                        f"**{money(_falta_usd*_fx)}** para comprar todas las acciones necesarias "
                         f"en las proporciones ideales. Puedes subir el monto a invertir, o quedarte "
                         f"con la cartera que sí alcanza (mostrada arriba)."
                     )
                 else:
                     st.success(
-                        f"✅ **Tu monto de {usd(capital)} alcanza para armar el portafolio óptimo "
-                        f"completo** (costo mínimo aproximado: {usd(_monto_minimo)}). "
+                        f"✅ **Tu monto de {money(capital)} alcanza para armar el portafolio óptimo "
+                        f"completo** (costo mínimo aproximado: {money(_monto_minimo*_fx)}). "
                         f"El sobrante se coloca en el Fondo de inversión / renta fija."
                     )
 
@@ -1571,6 +1598,13 @@ if show_tab3:
                                     line=dict(color=COL_DD,width=2),
                                     hovertemplate="%{x|%b %Y}<br><b>%{y:.1%}</b><extra></extra>"),
                           row=2,col=1)
+            # Drawdown de cada benchmark (líneas punteadas, mismo color que arriba)
+            for i,(n,ddb) in enumerate(bdd.items()):
+                fig.add_trace(go.Scatter(x=ddb.index,y=ddb.values,
+                    name=f"Caída {nombre_activo(n)}",
+                    line=dict(color=COL_BMKS[i%len(COL_BMKS)],dash="dot",width=1.4),
+                    hovertemplate=f"%{{x|%b %Y}}<br>%{{y:.1%}}<extra>{nombre_activo(n)}</extra>"),
+                    row=2,col=1)
             _prof=RiskProfile.for_split(eq_t,fi_t)
             fig.add_hline(y=-_prof.max_drawdown,line_dash="dash",line_color="#B23A48",
                          line_width=1.2,row=2,col=1,
@@ -1799,11 +1833,11 @@ if show_tab4:
         if "mc" in st.session_state and st.session_state["mc"]:
             mc=st.session_state["mc"]; gain=mc.median_path[-1]-mc.capital
             c1,c2,c3=st.columns(3)
-            c1.metric(f"💰 Valor proyectado a {mh} año(s)",f"${mc.median_path[-1]:,.0f}",delta=f"+${gain:,.0f} ({gain/mc.capital:+.1%})",
+            c1.metric(f"💰 Valor proyectado a {mh} año(s)",money(mc.median_path[-1]),delta=f"+{money(gain)} ({gain/mc.capital:+.1%})",
                       help="El valor estimado (escenario base) de la inversión al final del horizonte elegido.")
             c2.metric("🛡️ Probabilidad de no perder",f"{100-mc.prob_loss*100:.0f}%",
                       help="En qué porcentaje de los futuros simulados se termina con más dinero del invertido.")
-            c3.metric("🎯 Probabilidad de alcanzar la meta",f"{mc.prob_target:.0%}",delta=f"${mc.target:,.0f}",delta_color="off",
+            c3.metric("🎯 Probabilidad de alcanzar la meta",f"{mc.prob_target:.0%}",delta=money(mc.target),delta_color="off",
                       help="En qué porcentaje de los futuros simulados se alcanza o supera la meta.")
 
             terminal = mc.terminal
@@ -1921,13 +1955,13 @@ conjunto de futuros posibles."""
             # ── Métricas resumen ──
             st.markdown(f"##### Rango de valor proyectado a {mh} año(s)")
             sc1,sc2,sc3=st.columns(3)
-            sc1.metric("Escenario pesimista (P5)",f"${p5_val:,.0f}",delta=f"{p5_val/mc.capital-1:+.1%}",
+            sc1.metric("Escenario pesimista (P5)",money(p5_val),delta=f"{p5_val/mc.capital-1:+.1%}",
                        help="Percentil 5: solo el 5% de los futuros simulados terminó peor que esto. "
                             "Representa un escenario adverso razonable.")
-            sc2.metric("Escenario base (P50)",f"${p50_val:,.0f}",delta=f"{p50_val/mc.capital-1:+.1%}",
+            sc2.metric("Escenario base (P50)",money(p50_val),delta=f"{p50_val/mc.capital-1:+.1%}",
                        help="Mediana: la mitad de los futuros terminó por encima y la mitad por debajo. "
                             "Es el resultado central estimado.")
-            sc3.metric("Escenario optimista (P95)",f"${p95_val:,.0f}",delta=f"{p95_val/mc.capital-1:+.1%}",
+            sc3.metric("Escenario optimista (P95)",money(p95_val),delta=f"{p95_val/mc.capital-1:+.1%}",
                        help="Percentil 95: solo el 5% de los futuros simulados terminó mejor que esto. "
                             "Representa un escenario favorable razonable.")
 
