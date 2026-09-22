@@ -230,6 +230,7 @@ def usd(x):
 for k,v in {"tickers":[],"rf_tickers":[],"include_fico":True,"benchmarks":["^GSPC"],"views":[],"optimized":False,"result":None,
             "manual_weights":None,"returns":None,"bench_rets":None,"betas":None,"sectors":None,
             "returns_full":None,"bench_full":None,"last_period":None,"data_range":"",
+            "returns_usd":None,"hay_pen":False,"fx_disponible":True,
             "mode":None,"gk_ic":0.05,"step":0,"_w_ver":0,"asset_names":{},"_pop_open":True}.items():
     st.session_state.setdefault(k,v)
 
@@ -282,6 +283,45 @@ def precio_en_usd(tk, precio):
     if BVL_CURRENCY.get(tk, "USD") == "PEN":
         return precio / tipo_cambio_usdpen()
     return precio
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def tipo_cambio_historico(period="15y"):
+    """Serie histórica del tipo de cambio USD/PEN (soles por dólar) de yfinance.
+    Devuelve una pd.Series de niveles diarios, o None."""
+    try:
+        import yfinance as yf
+        d = yf.download("PEN=X", period="max", interval="1d", auto_adjust=True, progress=False)
+        if d is None or d.empty:
+            return None
+        px = d["Close"]
+        if hasattr(px, "columns"):
+            px = px.iloc[:, 0]
+        px.index = pd.to_datetime(px.index).tz_localize(None)
+        px = px[(px > 2.0) & (px < 6.0)]  # filtrar valores absurdos
+        px.name = "USDPEN"
+        return px.ffill()
+    except Exception:
+        return None
+
+def convertir_retornos_a_usd(returns_pen, fx_series):
+    """
+    Convierte log-retornos de activos en soles a log-retornos en dólares (CFA):
+      R_DC = (1+R_FC)(1+R_FX) - 1   [aritmético]
+      en log:  r_usd = r_sol + r_fx_inverso
+    fx_series = USD/PEN (soles por dólar). Si el sol se debilita (fx sube),
+    el retorno en USD baja → usamos el cambio inverso (-Δlog fx).
+    Solo afecta a columnas de activos en PEN.
+    """
+    if fx_series is None or fx_series.empty:
+        return returns_pen
+    fx = fx_series.reindex(returns_pen.index).ffill().bfill()
+    r_fx = np.log(fx / fx.shift(1)).fillna(0.0)  # Δlog del tipo de cambio
+    out = returns_pen.copy()
+    for col in out.columns:
+        if BVL_CURRENCY.get(col, "USD") == "PEN":
+            # activo en soles → restar la apreciación del dólar (Δlog USD/PEN)
+            out[col] = out[col] - r_fx
+    return out
 
 def _get_creds():
     try:
@@ -639,6 +679,17 @@ def run_dl(period):
         return False
     st.session_state.returns=lr; st.session_state.bench_rets={k:v.loc[lr.index] for k,v in bd.items()}
     st.session_state.returns_full=lr; st.session_state.bench_full=bd
+    # Guardar también los retornos convertidos a USD (método CFA) para el
+    # selector de moneda de análisis. Solo afecta activos en soles (PEN).
+    hay_pen = any(BVL_CURRENCY.get(t,"USD")=="PEN" for t in lr.columns)
+    if hay_pen:
+        fx = tipo_cambio_historico()
+        st.session_state.returns_usd = convertir_retornos_a_usd(lr, fx)
+        st.session_state.fx_disponible = fx is not None
+    else:
+        st.session_state.returns_usd = lr.copy()
+        st.session_state.fx_disponible = True
+    st.session_state.hay_pen = hay_pen
     b=calc_betas(lr,list(bd.values())[0].loc[lr.index]); b[FICO_TK]=FICO.beta; st.session_state.betas=b
     ok=[t for t in tks if t in lr.columns]
     s=fetch_sec(tuple(ok)); s[FICO_TK]=FICO.sector; st.session_state.sectors=s
@@ -1157,6 +1208,29 @@ if show_tab3:
                    "de renta fija ni activaste el Fondo de inversión. Agrega uno en la pestaña "
                    "**Activos**, o sube la renta variable a 100% para un portafolio solo de renta variable.")
     else:
+        # ── Selector de moneda de análisis (solo si hay activos en soles) ──
+        if st.session_state.get("hay_pen") and st.session_state.get("returns_usd") is not None:
+            _cm1, _cm2 = st.columns([2,3])
+            with _cm1:
+                moneda_vista = st.radio(
+                    "Moneda de análisis",
+                    ["Soles (S/)", "Dólares ($)"],
+                    horizontal=True, key="moneda_vista",
+                    help="Cómo medir los retornos. En dólares se incorpora el efecto "
+                         "del tipo de cambio USD/PEN (método CFA).")
+            # Reasignar la serie activa según la elección
+            if moneda_vista.startswith("Dólares"):
+                st.session_state.returns = st.session_state.returns_usd
+            else:
+                st.session_state.returns = st.session_state.returns_full
+            with _cm2:
+                if not st.session_state.get("fx_disponible", True):
+                    st.caption("⚠️ No se pudo obtener el tipo de cambio; se usa valor por defecto.")
+                else:
+                    st.caption(f"💱 Tipo de cambio USD/PEN de Yahoo Finance. En dólares, el "
+                               f"retorno combina el movimiento de la acción y del sol frente "
+                               f"al dólar (R = (1+R_activo)(1+R_cambio)−1, fórmula CFA).")
+
         if AUTO:
             # Modo automático: optimiza al entrar (o al pulsar recalcular).
             # Auto-optimización: recalcula solo si cambió algún input relevante.
