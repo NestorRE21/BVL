@@ -272,18 +272,23 @@ def simbolo_moneda_portafolio(tickers):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def tipo_cambio_usdpen():
-    """Tipo de cambio USD/PEN desde yfinance (PEN=X): cuántos soles vale 1 USD.
-    Default 3.75 si no se puede obtener."""
+    """Tipo de cambio USD/PEN (cuántos soles vale 1 dólar, ~3.75).
+    Intenta yfinance PEN=X; valida rango y corrige si viene invertido.
+    Default 3.75 si falla."""
     try:
         import yfinance as yf
-        d = yf.download("PEN=X", period="5d", interval="1d",
+        d = yf.download("PEN=X", period="1mo", interval="1d",
                         auto_adjust=True, progress=False)
         if d is not None and not d.empty:
             px = d["Close"]
-            if hasattr(px, "iloc"):
-                val = float(px.iloc[-1]) if px.ndim==1 else float(px.iloc[-1,0])
-                if 2.0 < val < 6.0:  # rango sensato para USD/PEN
-                    return val
+            if hasattr(px, "columns"):   # DataFrame
+                px = px.iloc[:, 0]
+            val = float(px.dropna().iloc[-1])
+            # USD/PEN debe estar ~3.7. Si viene invertido (~0.27), corregir.
+            if 0.15 < val < 0.45:
+                val = 1.0 / val
+            if 2.5 < val < 5.0:
+                return round(val, 4)
     except Exception:
         pass
     return 3.75
@@ -1003,12 +1008,18 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
                                 help="Elige el tipo de inversión antes de buscar. "
                                      "Las sugerencias se filtran según lo que elijas.")
     if add_to=="🔵 Renta variable":
-        with col_s: q=st.text_input("🔍 Buscar acción de la BVL (nombre o ticker)",
-                                    placeholder="Alicorp, Credicorp, ALICORC1, BAP…")
+        with col_s:
+            q=st.text_input("🔍 Buscar acción de la BVL (nombre o ticker)",
+                            placeholder="Alicorp, Credicorp, ALICORC1, BAP…")
+            st.markdown("<span style='color:#2e5e8c; font-weight:700; font-size:0.85rem;'>"
+                        "⌨️ Escribe y presiona ENTER para buscar</span>", unsafe_allow_html=True)
     else:
         _ph = ("Escribe el ticker del ETF de bonos: AGG, TLT, SHY…" if add_to=="🟢 Renta fija"
                else "Escribe el ticker del índice: ^GSPC, SPY, EPU…")
-        with col_s: q=st.text_input(f"🔍 Buscar en Yahoo Finance ({add_to})", placeholder=_ph)
+        with col_s:
+            q=st.text_input(f"🔍 Buscar en Yahoo Finance ({add_to})", placeholder=_ph)
+            st.markdown("<span style='color:#2e5e8c; font-weight:700; font-size:0.85rem;'>"
+                        "⌨️ Escribe el ticker y presiona ENTER</span>", unsafe_allow_html=True)
 
     if q.strip():
         if add_to=="🔵 Renta variable":
@@ -1023,7 +1034,7 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
         if not res:
             st.caption(f"ℹ️ Sin resultados para **{add_to}**.")
         if res:
-            st.caption("Resultados (pulsa para agregar):")
+            st.caption("Resultados (pulsa **➕** para agregar a tu cartera):")
             # Traducción amigable del tipo de instrumento
             _tipo_map={"EQUITY":"Acción de empresa","ETF":"Fondo cotizado (ETF)",
                        "MUTUALFUND":"Fondo de inversión","INDEX":"Índice de mercado",
@@ -1379,6 +1390,13 @@ if show_tab3:
         if st.session_state.optimized and st.session_state.result:
             res=st.session_state.result
             _wv=st.session_state.get("_w_ver",0)   # versión: refresca campos al recalcular
+            # Botón de Ver Proyecciones también ARRIBA (además del de abajo)
+            _proj_step_top = 2 if AUTO else 3
+            _tb1,_tb2=st.columns([3,1])
+            with _tb2:
+                if st.button("Ver Proyecciones →",use_container_width=True,type="primary",
+                             key="proj_top"):
+                    st.session_state.step=_proj_step_top; st.rerun()
             st.markdown("##### ⚖️ Cuánto poner en cada inversión")
             st.caption("Estos son los porcentajes sugeridos para tu cartera. Puedes ajustarlos a mano "
                        "si quieres: todo se actualiza al instante. Los porcentajes deberían sumar 100%.")
