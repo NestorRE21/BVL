@@ -740,6 +740,39 @@ with st.sidebar:
                 st.session_state.mode=None; st.rerun()
         st.divider()
 
+        # ── Inversión ──
+        st.markdown("### 💵 Monto a invertir")
+        st.markdown("**¿En qué moneda quieres invertir?**")
+        moneda_capital=st.radio(
+            "Moneda del monto",
+            ["🇵🇪 Soles (S/)", "🇺🇸 Dólares (US$)"],
+            horizontal=True, key="moneda_capital", label_visibility="collapsed")
+        _sim_cap = "S/" if "Soles" in moneda_capital else "$"
+        _nombre_moneda = "soles" if _sim_cap == "S/" else "dólares"
+        capital=st.number_input(
+            f"¿Cuánto quieres invertir en {_nombre_moneda}?",
+            min_value=100, max_value=100_000_000,
+            value=int(st.session_state.get("_capital",100_000)), step=1_000,
+            help=f"Escribe el monto total que quieres invertir, en {_nombre_moneda}.")
+        st.session_state._capital=capital
+        st.session_state._moneda_capital=_sim_cap
+        # Capital convertido a USD para comparaciones internas (precios en USD)
+        if _sim_cap == "S/":
+            capital_usd = capital / tipo_cambio_usdpen()
+        else:
+            capital_usd = capital
+        st.session_state._capital_usd = capital_usd
+        # Tarjeta grande con el monto y su equivalente
+        _equiv = (f"≈ US$ {capital_usd:,.0f}" if _sim_cap=="S/"
+                  else f"≈ S/ {capital*tipo_cambio_usdpen():,.0f}")
+        st.markdown(
+            f"<div style='text-align:center; background:#f0f5fb; border-radius:12px; "
+            f"padding:14px; margin-top:8px;'>"
+            f"<div style='font-size:2rem; font-weight:800; color:#1a3a5c;'>{_sim_cap} {capital:,.0f}</div>"
+            f"<div style='color:#7a8ba0; font-size:0.9rem; margin-top:2px;'>{_equiv} "
+            f"· T.C. S/{tipo_cambio_usdpen():.3f}</div></div>",
+            unsafe_allow_html=True)
+        st.divider()
         # ── Perfil de riesgo ──
         st.markdown("### ⚖️ Perfil de riesgo")
         st.caption("¿Cuánto riesgo aceptas? Más renta variable = más ganancia potencial "
@@ -780,39 +813,6 @@ with st.sidebar:
         """, unsafe_allow_html=True)
         st.divider()
 
-        # ── Inversión ──
-        st.markdown("### 💵 Monto a invertir")
-        st.markdown("**¿En qué moneda quieres invertir?**")
-        moneda_capital=st.radio(
-            "Moneda del monto",
-            ["🇵🇪 Soles (S/)", "🇺🇸 Dólares (US$)"],
-            horizontal=True, key="moneda_capital", label_visibility="collapsed")
-        _sim_cap = "S/" if "Soles" in moneda_capital else "$"
-        _nombre_moneda = "soles" if _sim_cap == "S/" else "dólares"
-        capital=st.number_input(
-            f"¿Cuánto quieres invertir en {_nombre_moneda}?",
-            min_value=100, max_value=100_000_000,
-            value=int(st.session_state.get("_capital",100_000)), step=1_000,
-            help=f"Escribe el monto total que quieres invertir, en {_nombre_moneda}.")
-        st.session_state._capital=capital
-        st.session_state._moneda_capital=_sim_cap
-        # Capital convertido a USD para comparaciones internas (precios en USD)
-        if _sim_cap == "S/":
-            capital_usd = capital / tipo_cambio_usdpen()
-        else:
-            capital_usd = capital
-        st.session_state._capital_usd = capital_usd
-        # Tarjeta grande con el monto y su equivalente
-        _equiv = (f"≈ US$ {capital_usd:,.0f}" if _sim_cap=="S/"
-                  else f"≈ S/ {capital*tipo_cambio_usdpen():,.0f}")
-        st.markdown(
-            f"<div style='text-align:center; background:#f0f5fb; border-radius:12px; "
-            f"padding:14px; margin-top:8px;'>"
-            f"<div style='font-size:2rem; font-weight:800; color:#1a3a5c;'>{_sim_cap} {capital:,.0f}</div>"
-            f"<div style='color:#7a8ba0; font-size:0.9rem; margin-top:2px;'>{_equiv} "
-            f"· T.C. S/{tipo_cambio_usdpen():.3f}</div></div>",
-            unsafe_allow_html=True)
-        st.divider()
         with st.expander("⚙️ Detalles avanzados"):
             _p=RiskProfile.for_split(eq_t,fi_t)
             st.caption(f"Fondo de inversión: {FICO.ret_annual:.2%} anual")
@@ -821,29 +821,6 @@ with st.sidebar:
             st.caption("Los cálculos usan datos diarios (hasta 15 años de historia).")
             if st.button("🗑️ Limpiar caché de datos", use_container_width=True):
                 st.cache_data.clear(); st.toast("Caché limpiado ✓")
-
-            # Diagnóstico de calidad de datos
-            if st.session_state.get("returns") is not None:
-                st.divider()
-                st.caption("**Diagnóstico: días de mayor movimiento por activo**")
-                rr = st.session_state.returns
-                filas = []
-                for col in rr.columns:
-                    s = rr[col].dropna()
-                    if len(s) == 0: continue
-                    # 3 mayores movimientos absolutos
-                    top = s.abs().nlargest(3)
-                    for fecha, _ in top.items():
-                        filas.append({
-                            "Activo": col,
-                            "Fecha": fecha.strftime("%Y-%m-%d"),
-                            "Retorno día": f"{np.exp(s.loc[fecha])-1:+.1%}",
-                        })
-                if filas:
-                    dfd = pd.DataFrame(filas).sort_values("Retorno día")
-                    st.dataframe(dfd, use_container_width=True, hide_index=True, height=200)
-                    st.caption("Si ves un movimiento sospechosamente grande (>±25%) en una "
-                               "fecha concreta, puede ser un split o error de dato de esa acción.")
 
 # Descargar siempre con 15 años (fijo)
 OPT_PERIOD = "15y"
@@ -970,6 +947,19 @@ def nav_buttons(back_to=None, next_to=None, next_label="Siguiente →", back_lab
 
 # ═══════════════════ TAB 1 ════════════════════════════════════════════════════
 if show_tab1:
+    # ── Monto a invertir: destacado como primer paso ──
+    _sm_b = st.session_state.get("_moneda_capital","$")
+    _cap_b = st.session_state.get("_capital",100_000)
+    st.markdown(
+        f"<div style='background:linear-gradient(90deg,#0B4F6C,#166088); border-radius:14px; "
+        f"padding:16px 22px; margin-bottom:14px; display:flex; justify-content:space-between; "
+        f"align-items:center; flex-wrap:wrap;'>"
+        f"<div><div style='color:#cfe3f0; font-size:0.85rem;'>💵 Vas a invertir</div>"
+        f"<div style='color:white; font-size:1.8rem; font-weight:800;'>{_sm_b} {_cap_b:,.0f}</div></div>"
+        f"<div style='color:#cfe3f0; font-size:0.85rem; text-align:right;'>"
+        f"Cambia el monto y la moneda<br>en la barra izquierda ←</div></div>",
+        unsafe_allow_html=True)
+
     st.markdown("### 📥 Paso 1: Elige en qué invertir")
     st.write("Busca empresas o fondos y agrégalos a tu cartera. Si no sabes por dónde empezar, "
              "usa el botón **Cargar ejemplo** más abajo.")
@@ -1056,38 +1046,6 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
         )
         del st.session_state["_bloqueo_precio"]
 
-    # ── Inversiones populares (un clic, sin conocer tickers) ──────────────
-    with st.expander("⭐ ¿No sabes qué agregar? Elige de las inversiones más populares", expanded=st.session_state.get("_pop_open",True)):
-        if add_to=="🔵 Renta variable":
-            _pop=POPULARES_RV; _dest="tickers"; _lbl="RV"
-        elif add_to=="🟢 Renta fija":
-            _pop=POPULARES_RF; _dest="rf_tickers"; _lbl="RF"
-        else:
-            _pop=POPULARES_BK; _dest="benchmarks"; _lbl="Benchmark"
-        st.caption(f"Mostrando opciones de **{add_to}**. Pulsa cualquiera para agregarla. "
-                   "Cambia el tipo arriba a la derecha para ver otras.")
-        pop_cols=st.columns(3)
-        for i,(tk,nombre,emo) in enumerate(_pop):
-            with pop_cols[i%3]:
-                ya = tk in st.session_state.get(_dest,[])
-                if st.button(f"{emo} {nombre}"+(" ✓" if ya else ""),
-                             key=f"pop_{_dest}_{tk}",use_container_width=True,disabled=ya):
-                    st.session_state.asset_names[tk]=nombre
-                    if _dest=="tickers":
-                        _ok,_pn,_sa,_tot=puede_agregar(tk,st.session_state.get('_capital_usd',capital))
-                        if _ok:
-                            st.session_state[_dest].append(tk); st.toast(f"✓ {nombre} agregado"); st.rerun()
-                        else:
-                            st.session_state["_bloqueo_precio"]=(nombre,_pn,_sa,_tot,capital); st.rerun()
-                    else:
-                        st.session_state[_dest].append(tk); st.toast(f"✓ {nombre} agregado"); st.rerun()
-
-    if not st.session_state.tickers and not st.session_state.rf_tickers:
-        st.info("👇 ¿Primera vez? Pulsa aquí para cargar una cartera de ejemplo con acciones "
-                "conocidas de la BVL (Alicorp, Credicorp, Ferreycorp…) y explorar cómo funciona.")
-        if st.button("🚀 Cargar ejemplo",type="primary"):
-            st.session_state.tickers=list(EJ); st.session_state.views=[]; st.session_state.rf_tickers=[]
-
     # ── Listas: RV + RF + Benchmarks ─────────────────────────────────────
     # Precios actuales de las acciones de RV (para mostrar como guía)
     _precios_rv_raw = fetch_precios(tuple(st.session_state.tickers)) if st.session_state.tickers else {}
@@ -1146,6 +1104,39 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
             _n=nombre_activo(b)
             c1.write(f"**{_n}**" + (f"  ·  {b}" if _n!=b else ""))
             if c2.button("✕",key=f"rb{i}"): st.session_state.benchmarks.pop(i)
+
+
+    # ── Inversiones populares (un clic, sin conocer tickers) ──────────────
+    with st.expander("⭐ ¿No sabes qué agregar? Elige de las inversiones más populares", expanded=st.session_state.get("_pop_open",True)):
+        if add_to=="🔵 Renta variable":
+            _pop=POPULARES_RV; _dest="tickers"; _lbl="RV"
+        elif add_to=="🟢 Renta fija":
+            _pop=POPULARES_RF; _dest="rf_tickers"; _lbl="RF"
+        else:
+            _pop=POPULARES_BK; _dest="benchmarks"; _lbl="Benchmark"
+        st.caption(f"Mostrando opciones de **{add_to}**. Pulsa cualquiera para agregarla. "
+                   "Cambia el tipo arriba a la derecha para ver otras.")
+        pop_cols=st.columns(3)
+        for i,(tk,nombre,emo) in enumerate(_pop):
+            with pop_cols[i%3]:
+                ya = tk in st.session_state.get(_dest,[])
+                if st.button(f"{emo} {nombre}"+(" ✓" if ya else ""),
+                             key=f"pop_{_dest}_{tk}",use_container_width=True,disabled=ya):
+                    st.session_state.asset_names[tk]=nombre
+                    if _dest=="tickers":
+                        _ok,_pn,_sa,_tot=puede_agregar(tk,st.session_state.get('_capital_usd',capital))
+                        if _ok:
+                            st.session_state[_dest].append(tk); st.toast(f"✓ {nombre} agregado"); st.rerun()
+                        else:
+                            st.session_state["_bloqueo_precio"]=(nombre,_pn,_sa,_tot,capital); st.rerun()
+                    else:
+                        st.session_state[_dest].append(tk); st.toast(f"✓ {nombre} agregado"); st.rerun()
+
+    if not st.session_state.tickers and not st.session_state.rf_tickers:
+        st.info("👇 ¿Primera vez? Pulsa aquí para cargar una cartera de ejemplo con acciones "
+                "conocidas de la BVL (Alicorp, Credicorp, Ferreycorp…) y explorar cómo funciona.")
+        if st.button("🚀 Cargar ejemplo",type="primary"):
+            st.session_state.tickers=list(EJ); st.session_state.views=[]; st.session_state.rf_tickers=[]
 
     # ── Continuar (descarga automática) ──────────────────────────────────
     has_rf = bool(st.session_state.rf_tickers) or st.session_state.get("include_fico", True)
@@ -1543,29 +1534,6 @@ if show_tab3:
                 br = st.session_state.bench_rets[n].loc[pr.index].fillna(0) if n in st.session_state.bench_rets else pd.Series(0,index=pr.index)
                 bw[n] = np.exp(br.cumsum()) * capital
                 bdd[n] = bw[n] / bw[n].cummax() - 1
-
-            # ── Diagnóstico: peores días del portafolio y su causa ──
-            with st.expander("🔬 Diagnóstico: ¿qué causó las mayores caídas?"):
-                rr = st.session_state.returns  # retornos por activo (log)
-                rr_win = rr.loc[rr.index >= cutoff]
-                peores = pr.nsmallest(10)
-                filas = []
-                for fecha, ret_port in peores.items():
-                    # qué activo tuvo el peor retorno ese día
-                    if fecha in rr_win.index:
-                        dia = rr_win.loc[fecha].dropna()
-                        if len(dia):
-                            peor_act = dia.idxmin()
-                            filas.append({
-                                "Fecha": fecha.strftime("%Y-%m-%d"),
-                                "Caída portafolio": f"{np.exp(ret_port)-1:+.1%}",
-                                "Activo culpable": peor_act,
-                                "Su caída ese día": f"{np.exp(dia.min())-1:+.1%}",
-                            })
-                if filas:
-                    st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
-                    st.caption("Compara estas fechas con TradingView. Si la caída del activo "
-                               "culpable NO aparece en TradingView, es un dato erróneo de la API.")
 
             # ── Estilo financiero profesional ──
             _sm = st.session_state.get("_moneda_capital","$")
