@@ -801,6 +801,7 @@ with st.sidebar:
         """, unsafe_allow_html=True)
 
         _perfil_nombre,_perfil_desc=detectar_perfil(rv_pct)
+        st.session_state._perfil_nombre=_perfil_nombre
         _emoji_perfil = "🛡️" if rv_pct<=35 else ("⚖️" if rv_pct<=65 else "🚀")
         _color_perfil = "#2ca02c" if rv_pct<=35 else ("#2e5e8c" if rv_pct<=65 else "#d6604d")
         st.markdown(f"""
@@ -924,6 +925,23 @@ for i,label in enumerate(STEPS):
                      type="primary" if i==cur else "secondary"):
             st.session_state.step = i; st.rerun()
 st.divider()
+
+# ── Mini-resumen del estado del portafolio (siempre visible) ──
+if st.session_state.mode is not None:
+    _n_rv=len(st.session_state.tickers)
+    _n_rf=len(st.session_state.rf_tickers)+(1 if st.session_state.get("include_fico",True) else 0)
+    _sm_r=st.session_state.get("_moneda_capital","$")
+    _cap_r=st.session_state.get("_capital",100_000)
+    _perf_r=st.session_state.get("_perfil_nombre","—")
+    st.markdown(
+        f"<div style='background:#f0f5fb; border-radius:10px; padding:8px 16px; "
+        f"margin-bottom:12px; display:flex; gap:22px; flex-wrap:wrap; font-size:0.88rem;'>"
+        f"<span>🔵 <b>Renta variable:</b> {_n_rv}</span>"
+        f"<span>🟢 <b>Renta fija:</b> {_n_rf}</span>"
+        f"<span>📊 <b>Benchmarks:</b> {len(st.session_state.benchmarks)}</span>"
+        f"<span>💵 <b>Monto:</b> {_sm_r} {_cap_r:,.0f}</span>"
+        f"<span>⚖️ <b>Perfil:</b> {_perf_r}</span>"
+        f"</div>", unsafe_allow_html=True)
 
 # Helpers de tab: cada bloque se ejecuta solo si es el paso activo.
 # (Se usan flags en vez de st.tabs para poder navegar con botones.)
@@ -1164,15 +1182,29 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
         st.success(f"📦 Datos cargados: {st.session_state.data_range}")
 
     st.divider()
+    # ── Checklist de requisitos para continuar ──
+    _chk_rv = bool(st.session_state.tickers)
+    _chk_rf = has_rf
+    _chk_bk = bool(st.session_state.benchmarks)
+    _chk_asset = _chk_rv or _chk_rf
     if not can_continue:
-        st.caption("💡 Para continuar necesitas al menos un activo (renta variable o renta fija) "
-                   "y un benchmark de referencia.")
+        _items=[]
+        _items.append(("✅" if _chk_asset else "⬜",
+                       "Al menos un activo (renta variable o renta fija)"))
+        _items.append(("✅" if _chk_bk else "⬜",
+                       "Un benchmark de referencia (ej. S&P 500)"))
+        _html="<div style='background:#fff8e6; border-radius:10px; padding:12px 16px; "\
+              "border:1px solid #f0e0b0;'><b>Para continuar te falta:</b><br>"
+        for ic,txt in _items:
+            _color = "#2ca02c" if ic=="✅" else "#b0783a"
+            _html+=f"<div style='color:{_color}; margin-top:4px;'>{ic} {txt}</div>"
+        _html+="</div>"
+        st.markdown(_html, unsafe_allow_html=True)
     _next_label = "Continuar a Portafolio →" if AUTO else "Continuar a Expectativas →"
     cc_l,_,cc_r=st.columns([1,3,1])
     with cc_r:
         if st.button(_next_label, use_container_width=True, type="primary",
                      disabled=not can_continue, key="continue_dl"):
-            # Descarga automática de datos si hace falta, luego avanza
             with st.spinner("Descargando datos y preparando el análisis…"):
                 ok = run_dl(OPT_PERIOD)
             if ok:
@@ -1289,6 +1321,60 @@ if show_tab3:
                 st.session_state["_w_ver"] = st.session_state.get("_w_ver",0)+1  # nueva versión de campos
                 for x in ["mc","stress"]:
                     if x in st.session_state: del st.session_state[x]
+
+        # ── Editar activos desde aquí mismo (sin volver atrás) ──
+        with st.expander("✏️ Agregar o quitar activos de tu cartera"):
+            st.caption("Modifica tu cartera aquí mismo. Al pulsar 'Volver a optimizar' se "
+                       "actualizan los datos y se recalcula todo.")
+            _ec1,_ec2=st.columns([3,1])
+            with _ec2:
+                _edest=st.radio("Tipo",["🔵 RV","🟢 RF"],key="edit_dest_t3",horizontal=True)
+            with _ec1:
+                if _edest=="🔵 RV":
+                    _eq=st.text_input("Buscar acción BVL",key="edit_q_rv",
+                                      placeholder="Alicorp, ALICORC1…")
+                    if _eq.strip():
+                        _eres=filter_search(search_yf(_eq.strip()),"🔵 Renta variable")[:4]
+                        if _eres:
+                            _ecols=st.columns(len(_eres))
+                            for _i,_r in enumerate(_eres):
+                                with _ecols[_i]:
+                                    if st.button(f"➕ {_r['tk']}",key=f"eadd_rv_{_r['tk']}",use_container_width=True):
+                                        if _r['tk'] not in st.session_state.tickers:
+                                            st.session_state.tickers.append(_r['tk'])
+                                            st.session_state.asset_names[_r['tk']]=_r['nm']
+                                            st.rerun()
+                else:
+                    _erf=st.text_input("Ticker ETF de bonos (yfinance)",key="edit_q_rf",
+                                       placeholder="AGG, TLT, SHY…")
+                    if _erf.strip() and st.button(f"➕ Agregar {_erf.strip().upper()}",key="eadd_rf"):
+                        _tk=_erf.strip().upper()
+                        if _tk not in st.session_state.rf_tickers:
+                            st.session_state.rf_tickers.append(_tk); st.rerun()
+            _le1,_le2=st.columns(2)
+            with _le1:
+                st.caption("**🔵 Renta variable**")
+                for _i,_t in enumerate(list(st.session_state.tickers)):
+                    _q1,_q2=st.columns([5,1]); _q1.write(nombre_activo(_t))
+                    if _q2.button("✕",key=f"edel_rv_{_i}"):
+                        st.session_state.tickers.pop(_i); st.rerun()
+            with _le2:
+                st.caption("**🟢 Renta fija**")
+                for _i,_t in enumerate(list(st.session_state.rf_tickers)):
+                    _q1,_q2=st.columns([5,1]); _q1.write(nombre_activo(_t))
+                    if _q2.button("✕",key=f"edel_rf_{_i}"):
+                        st.session_state.rf_tickers.pop(_i); st.rerun()
+            if st.button("🔄 Volver a optimizar con estos activos",type="primary",
+                         use_container_width=True,key="reopt_t3"):
+                with st.spinner("Actualizando datos y re-optimizando…"):
+                    _ok=run_dl(OPT_PERIOD)
+                if _ok:
+                    st.session_state.optimized=False
+                    for _x in ["_auto_sig","_man_sig","mc","stress"]:
+                        if _x in st.session_state: del st.session_state[_x]
+                    st.rerun()
+                else:
+                    st.error("No se pudieron actualizar los datos. Revisa los tickers.")
 
         if st.session_state.optimized and st.session_state.result:
             res=st.session_state.result
@@ -1769,12 +1855,13 @@ if show_tab4:
         if mc:
             p5_top=mc.percentiles[5][-1]; p50_top=mc.median_path[-1]; p95_top=mc.percentiles[95][-1]
             _g5=p5_top/mc.capital-1; _g50=p50_top/mc.capital-1; _g95=p95_top/mc.capital-1
+            _sm_p = st.session_state.get("_moneda_capital","$")
             st.markdown(f"### 🔮 Proyección de tu inversión a {mh} año(s)")
             st.markdown(f"""
             <div style="background:linear-gradient(135deg,#2e5e8c 0%,#3d7ab8 100%); border-radius:16px;
                         padding:20px 24px; color:white; box-shadow:0 6px 22px rgba(46,94,140,0.28); margin-bottom:14px;">
-                <div style="font-size:0.9rem; opacity:0.85;">Tu inversión de ${mc.capital:,.0f} podría convertirse en</div>
-                <div style="font-size:2.8rem; font-weight:800; line-height:1.1; margin:4px 0;">${p50_top:,.0f}</div>
+                <div style="font-size:0.9rem; opacity:0.85;">Tu inversión de {_sm_p}{mc.capital:,.0f} podría convertirse en</div>
+                <div style="font-size:2.8rem; font-weight:800; line-height:1.1; margin:4px 0;">{_sm_p}{p50_top:,.0f}</div>
                 <div style="font-size:0.95rem; opacity:0.9;">en el escenario más probable
                     ({'ganancia' if _g50>=0 else 'pérdida'} de {abs(_g50):.1%})</div>
             </div>
@@ -1790,7 +1877,7 @@ if show_tab4:
                 <div style="background:white; border-top:4px solid {color}; border-radius:12px;
                             padding:14px 16px; box-shadow:0 2px 10px rgba(30,60,90,0.07); text-align:center;">
                     <div style="font-size:0.82rem; color:#64748b; font-weight:600;">{titulo}</div>
-                    <div style="font-size:1.7rem; font-weight:800; color:{color}; margin:4px 0;">${valor:,.0f}</div>
+                    <div style="font-size:1.7rem; font-weight:800; color:{color}; margin:4px 0;">{_sm_p}{valor:,.0f}</div>
                     <div style="font-size:0.8rem; color:#94a3b8;">{sub} · {gan:+.1%}</div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1836,10 +1923,10 @@ if show_tab4:
             fig1.add_trace(go.Scatter(x=x,y=mc.median_path,name="Mediana (P50)",
                                      line=dict(color=C_RV,width=2.5)))
             fig1.add_hline(y=mc.capital,line_dash="dot",line_color="gray",
-                          annotation_text=f"Inversión ${mc.capital:,.0f}")
+                          annotation_text=f"Inversión {st.session_state.get('_moneda_capital','$')}{mc.capital:,.0f}")
             if mc.target!=mc.capital:
                 fig1.add_hline(y=mc.target,line_dash="dot",line_color=C_RF,
-                              annotation_text=f"Meta ${mc.target:,.0f}")
+                              annotation_text=f"Meta {st.session_state.get('_moneda_capital','$')}{mc.target:,.0f}")
             fig1.update_yaxes(tickprefix="$",tickformat=",.0f")
             fig1.update_layout(height=380,margin=dict(l=0,r=0,t=5,b=0),
                               legend=dict(orientation="h",y=-0.12))
@@ -1872,19 +1959,19 @@ if show_tab4:
                     line=dict(color="rgba(150,150,150,0.15)",width=0.5),
                     showlegend=False,hoverinfo="skip"))
             fig2.add_trace(go.Scatter(x=x,y=mc.paths[idx_best],
-                name=f"🚀 Mejor: ${gbm_max:,.0f} ({gbm_max/mc.capital-1:+.1%})",
+                name=f"🚀 Mejor: {st.session_state.get('_moneda_capital','$')}{gbm_max:,.0f} ({gbm_max/mc.capital-1:+.1%})",
                 line=dict(color="#2CA02C",width=2.5)))
             fig2.add_trace(go.Scatter(x=x,y=mc.paths[idx_worst],
-                name=f"😟 Peor: ${gbm_min:,.0f} ({gbm_min/mc.capital-1:+.1%})",
+                name=f"😟 Peor: {st.session_state.get('_moneda_capital','$')}{gbm_min:,.0f} ({gbm_min/mc.capital-1:+.1%})",
                 line=dict(color="#D6604D",width=2.5)))
             fig2.add_trace(go.Scatter(x=x,y=mc.paths[idx_median],
                 name=f"📊 Mediana: ${terminal[idx_median]:,.0f} ({terminal[idx_median]/mc.capital-1:+.1%})",
                 line=dict(color=C_RV,width=3)))
             fig2.add_hline(y=mc.capital,line_dash="dot",line_color="gray",
-                          annotation_text=f"Inversión ${mc.capital:,.0f}")
+                          annotation_text=f"Inversión {st.session_state.get('_moneda_capital','$')}{mc.capital:,.0f}")
             if mc.target!=mc.capital:
                 fig2.add_hline(y=mc.target,line_dash="dot",line_color=C_RF,
-                              annotation_text=f"Meta ${mc.target:,.0f}")
+                              annotation_text=f"Meta {st.session_state.get('_moneda_capital','$')}{mc.target:,.0f}")
             fig2.update_yaxes(tickprefix="$",tickformat=",.0f")
             fig2.update_layout(height=420,margin=dict(l=0,r=0,t=5,b=0),
                               legend=dict(orientation="h",y=-0.12))
