@@ -647,6 +647,101 @@ def wdd(w,rets,bd,cap):
         br=v.loc[common].fillna(0); bw[n]=np.exp(br.cumsum())*cap; bdd[n]=bw[n]/bw[n].cummax()-1
     return pr,wl,dd,bw,bdd
 
+def generar_excel(res, wnorm, capital, mc=None):
+    """
+    Genera un Excel con varias hojas:
+      1. Retornos por plazo (1-15 años) por acción y del portafolio
+      2. Histórico del portafolio (wealth index diario + drawdown)
+      3. Composición y pesos
+      4. Proyecciones Monte Carlo (si hay)
+    Devuelve los bytes del archivo.
+    """
+    from io import BytesIO
+    rets = st.session_state.returns          # log-retornos diarios
+    rets_full = st.session_state.returns_full if st.session_state.returns_full is not None else rets
+    bd = st.session_state.bench_rets or {}
+    buf = BytesIO()
+
+    with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+        # ── HOJA 1: Retornos anualizados por plazo (1 a 15 años) ──
+        plazos = list(range(1, 16))
+        hoy = rets_full.index.max()
+        filas = []
+        activos = [a for a in wnorm.index if a in rets_full.columns] + \
+                  [a for a in wnorm.index if a == FICO_TK]
+        # Retorno anualizado de cada activo para cada ventana de N años
+        for a in wnorm.index:
+            fila = {"Activo": nombre_activo(a), "Ticker": a, "Peso": f"{wnorm[a]:.2%}"}
+            for p in plazos:
+                ini = hoy - pd.DateOffset(years=p)
+                if a == FICO_TK:
+                    fila[f"{p}a"] = FICO.ret_annual  # retorno constante forzado
+                elif a in rets_full.columns:
+                    s = rets_full.loc[rets_full.index >= ini, a].dropna()
+                    if len(s) > 20:
+                        ann = np.exp(s.mean() * PPY) - 1  # retorno anualizado geométrico
+                        fila[f"{p}a"] = ann
+                    else:
+                        fila[f"{p}a"] = None
+                else:
+                    fila[f"{p}a"] = None
+            filas.append(fila)
+        # Fila del PORTAFOLIO (retorno ponderado por plazo)
+        fila_port = {"Activo": "PORTAFOLIO", "Ticker": "—", "Peso": "100%"}
+        for p in plazos:
+            ini = hoy - pd.DateOffset(years=p)
+            eq = [a for a in wnorm.index if a in rets_full.columns]
+            pr = sum(wnorm.get(c,0)*rets_full.loc[rets_full.index>=ini, c].fillna(0) for c in eq)
+            if FICO_TK in wnorm.index:
+                pr = pr + wnorm[FICO_TK]*(np.log(1+FICO.ret_annual)/PPY)
+            pr = pr.dropna()
+            fila_port[f"{p}a"] = np.exp(pr.mean()*PPY)-1 if len(pr)>20 else None
+        filas.append(fila_port)
+        df_ret = pd.DataFrame(filas)
+        df_ret.to_excel(xl, sheet_name="Retornos por plazo", index=False)
+
+        # ── HOJA 2: Histórico del portafolio (wealth + drawdown) ──
+        pr, wl, dd, bw, bdd = wdd(wnorm, rets, bd, capital)
+        hist = pd.DataFrame({
+            "Fecha": wl.index,
+            "Valor portafolio": wl.values,
+            "Retorno diario": pr.values,
+            "Drawdown": dd.values,
+        })
+        for n, serie in bw.items():
+            hist[f"Benchmark {n}"] = serie.reindex(wl.index).values
+        hist.to_excel(xl, sheet_name="Historico portafolio", index=False)
+
+        # ── HOJA 3: Composición ──
+        comp = pd.DataFrame({
+            "Activo": [nombre_activo(a) for a in wnorm.index],
+            "Ticker": list(wnorm.index),
+            "Sector": [BVL_SECTORS.get(a, "—") for a in wnorm.index],
+            "Moneda": [BVL_CURRENCY.get(a, "USD") for a in wnorm.index],
+            "Peso": [wnorm[a] for a in wnorm.index],
+            "Retorno esperado (BL)": [res.bl_returns.get(a, None) for a in wnorm.index],
+        })
+        comp.to_excel(xl, sheet_name="Composicion", index=False)
+
+        # ── HOJA 4: Proyecciones Monte Carlo ──
+        if mc is not None:
+            proj = pd.DataFrame({"Fecha": mc.dates})
+            for p in [5, 10, 25, 50, 75, 90, 95]:
+                proj[f"P{p}"] = mc.percentiles[p]
+            proj["Media"] = mc.mean_path
+            proj.to_excel(xl, sheet_name="Proyeccion MonteCarlo", index=False)
+            # Resumen de escenarios terminales
+            resumen = pd.DataFrame({
+                "Escenario": ["Pesimista P5","P10","P25","Central P50","P75","P90","Optimista P95"],
+                "Valor final": [mc.percentiles[p][-1] for p in [5,10,25,50,75,90,95]],
+                "Retorno total": [mc.percentiles[p][-1]/mc.capital-1 for p in [5,10,25,50,75,90,95]],
+            })
+            resumen.to_excel(xl, sheet_name="Proyeccion resumen", index=False)
+
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def run_dl(period):
     tks=st.session_state.tickers; bks=st.session_state.benchmarks
     rf_tks=st.session_state.rf_tickers
@@ -1871,6 +1966,22 @@ if show_tab4:
             st.session_state._mc_sig=mc_sig
         mc=st.session_state.get("mc")
         if mc:
+            # ── Botón de descarga Excel completo ──
+            try:
+                _xlsx = generar_excel(st.session_state.result,
+                                      st.session_state.manual_weights
+                                      if st.session_state.get("manual_weights") is not None
+                                      else st.session_state.result.weights,
+                                      capital, mc)
+                st.download_button(
+                    "📥 Descargar todo en Excel (retornos, histórico y proyecciones)",
+                    data=_xlsx,
+                    file_name=f"portafolio_coril_{pd.Timestamp.today():%Y%m%d}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True)
+            except Exception as _e:
+                st.caption(f"⚠️ No se pudo generar el Excel: {_e}")
+
             p5_top=mc.percentiles[5][-1]; p50_top=mc.median_path[-1]; p95_top=mc.percentiles[95][-1]
             _g5=p5_top/mc.capital-1; _g50=p50_top/mc.capital-1; _g95=p95_top/mc.capital-1
             _sm_p = st.session_state.get("_moneda_capital","$")
