@@ -534,6 +534,31 @@ def search_yf(q):
             out.append({"tk":tk,"nm":display,"tp":"EQUITY","ex":"BVL"})
     return out[:20]
 
+@st.cache_data(show_spinner=False, ttl=600)
+def validar_ticker_yf(ticker):
+    """Verifica que un ticker EXISTE en yfinance y trae datos reales.
+    Devuelve (existe: bool, nombre: str). Cachea para no repetir llamadas."""
+    tk = ticker.strip().upper()
+    if not tk:
+        return (False, "")
+    try:
+        import yfinance as yf
+        t = yf.Ticker(tk)
+        # Intentar precio histórico corto: si no hay, el ticker no existe
+        hist = t.history(period="1mo", interval="1d")
+        if hist is None or hist.empty:
+            return (False, "")
+        # Obtener nombre si está disponible
+        nombre = tk
+        try:
+            info = t.info or {}
+            nombre = info.get("shortName") or info.get("longName") or tk
+        except Exception:
+            pass
+        return (True, nombre)
+    except Exception:
+        return (False, "")
+
 # Keywords en nombre que indican renta fija
 _RF_KW = {"bond","treasury","income","fixed","aggregate","debt","govt","municipal",
           "corporate bond","tips","tbill","bill","note","yield","interest rate",
@@ -1150,16 +1175,27 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
 
     if q.strip():
         if add_to=="🔵 Renta variable":
-            # Renta variable: buscar en catálogo BVL
+            # Renta variable: buscar en catálogo BVL (fuente autorizada)
             raw_res=search_yf(q.strip())
             res=filter_search(raw_res, add_to)
+            if not res:
+                st.warning(f"⚠️ **{q.strip().upper()}** no está en el catálogo de la BVL. "
+                           f"Solo puedes agregar acciones que coticen en la BVL. "
+                           f"Prueba buscar por nombre (ej: Alicorp, Credicorp).")
         else:
-            # RF y Benchmark: el ticker escrito se usa directo (yfinance)
+            # RF y Benchmark: validar que el ticker EXISTA en yfinance
             _tk_manual=q.strip().upper()
-            res=[{"tk":_tk_manual,"nm":_NOMBRES_CONOCIDOS.get(_tk_manual,_tk_manual),
-                  "tp":"ETF" if add_to=="🟢 Renta fija" else "INDEX","ex":"Yahoo Finance"}]
-        if not res:
-            st.caption(f"ℹ️ Sin resultados para **{add_to}**.")
+            with st.spinner(f"Verificando {_tk_manual} en Yahoo Finance…"):
+                _existe,_nom = validar_ticker_yf(_tk_manual)
+            if _existe:
+                res=[{"tk":_tk_manual,"nm":_nom,
+                      "tp":"ETF" if add_to=="🟢 Renta fija" else "INDEX","ex":"Yahoo Finance"}]
+            else:
+                res=[]
+                st.warning(f"⚠️ **{_tk_manual}** no existe en Yahoo Finance o no tiene datos. "
+                           f"Verifica el ticker. Ejemplos válidos: "
+                           + ("AGG, TLT, SHY, LQD, BND" if add_to=="🟢 Renta fija"
+                              else "^GSPC, SPY, QQQ, EPU, ^IXIC") + ".")
         if res:
             st.caption("Resultados (pulsa **➕** para agregar a tu cartera):")
             # Traducción amigable del tipo de instrumento
@@ -1509,7 +1545,11 @@ if show_tab3:
                                        placeholder="AGG, TLT, SHY…")
                     if _erf.strip() and st.button(f"➕ Agregar {_erf.strip().upper()}",key="eadd_rf"):
                         _tk=_erf.strip().upper()
-                        if _tk not in st.session_state.rf_tickers:
+                        with st.spinner(f"Verificando {_tk}…"):
+                            _ex,_ = validar_ticker_yf(_tk)
+                        if not _ex:
+                            st.warning(f"⚠️ {_tk} no existe en Yahoo Finance. Ej: AGG, TLT, SHY.")
+                        elif _tk not in st.session_state.rf_tickers:
                             st.session_state.rf_tickers.append(_tk); st.rerun()
             _le1,_le2=st.columns(2)
             with _le1:
