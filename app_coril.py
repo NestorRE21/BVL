@@ -150,9 +150,28 @@ h4 { font-size: 1.35rem !important; }
 </style>
 """, unsafe_allow_html=True)
 RF,PPY = 0.02,252   # PPY=252 días hábiles al año (datos diarios)
-FICO_TK = "FICCMP13"
+FICO_TK = "FICCMP13"          # ticker interno principal (compatibilidad)
 FICO_DISPLAY = "Fondo de inversión"
-FICO = ForcedAsset(ret_annual=0.0625,vol_annual=0.010,beta=0.30,sector="Factoring",region="Perú",moneda="USD",instrumento="Fondo")
+# Dos FICOs de Coril: uno en soles (7%) y otro en dólares (6%)
+FICO_PEN = ForcedAsset(ret_annual=0.07, vol_annual=0.010, beta=0.30,
+                       sector="Factoring", region="Perú", moneda="PEN", instrumento="Fondo")
+FICO_USD = ForcedAsset(ret_annual=0.06, vol_annual=0.010, beta=0.30,
+                       sector="Factoring", region="Perú", moneda="USD", instrumento="Fondo")
+FICOS = {
+    "FICO_PEN": {"ticker":"FICO_PEN","obj":FICO_PEN,"nombre":"FICO Coril Soles (7%)","moneda":"PEN"},
+    "FICO_USD": {"ticker":"FICO_USD","obj":FICO_USD,"nombre":"FICO Coril Dólares (6%)","moneda":"USD"},
+}
+# FICO por defecto (para compatibilidad con el resto del código que usa FICO/FICO_TK)
+FICO = FICO_PEN
+FICO_TK = "FICO_PEN"
+
+def es_fico(ticker):
+    """True si el ticker es cualquiera de los FICOs de Coril."""
+    return ticker in FICOS or ticker == "FICCMP13"
+
+def es_renta_fija(ticker):
+    """True si el activo pertenece al bucket de renta fija (FICO o bono/ETF de RF)."""
+    return es_fico(ticker) or ticker in st.session_state.get("rf_tickers", [])
 
 def disp(ticker):
     """Nombre visible de un ticker (FICCMP13 → Fondo de inversión). Para uso en la interfaz."""
@@ -601,8 +620,15 @@ def filter_search(results, category):
 
 def do_opt(eq_tickers, rf_tickers, include_fico, views_cfg, eq_t, fi_t, pb, auto=False):
     betas=st.session_state.betas.copy()
-    forced = {FICO_TK: FICO} if include_fico else {}
-    if include_fico: betas[FICO_TK]=FICO.beta
+    # Elegir el FICO según la selección del usuario (soles o dólares)
+    _fchoice = st.session_state.get("fico_choice","FICO_PEN")
+    if include_fico and _fchoice in FICOS:
+        _fk = FICOS[_fchoice]["ticker"]
+        _fobj = FICOS[_fchoice]["obj"]
+        forced = {_fk: _fobj}
+        betas[_fk] = _fobj.beta
+    else:
+        forced = {}
     all_assets = set(eq_tickers) | set(rf_tickers) | (set(forced.keys()) if forced else set())
 
     if auto:
@@ -636,9 +662,15 @@ def do_opt(eq_tickers, rf_tickers, include_fico, views_cfg, eq_t, fi_t, pb, auto
 
 def wdd(w,rets,bd,cap):
     if not isinstance(bd,dict): bd={}
-    eq=[a for a in w.index if a in rets.columns and a!=FICO_TK]
+    # Activos con datos de mercado (no FICOs)
+    eq=[a for a in w.index if a in rets.columns and not es_fico(a)]
     pr=sum(w.get(c,0)*rets[c].fillna(0) for c in eq) if eq else pd.Series(0,index=rets.index)
-    if FICO_TK in w.index and w[FICO_TK]>1e-8: pr=pr+w[FICO_TK]*(np.log(1+FICO.ret_annual)/PPY)
+    # Cada FICO aporta su retorno constante
+    for _ft, _fdef in FICOS.items():
+        if _ft in w.index and w[_ft]>1e-8:
+            pr = pr + w[_ft]*(np.log(1+_fdef["obj"].ret_annual)/PPY)
+    if "FICCMP13" in w.index and w["FICCMP13"]>1e-8:
+        pr = pr + w["FICCMP13"]*(np.log(1+FICO.ret_annual)/PPY)
     pr=pr.fillna(0); common=pr.index
     for v in bd.values(): common=common.intersection(v.index)
     pr=pr.loc[common]; wl=np.exp(pr.cumsum())*cap; dd=wl/wl.cummax()-1
@@ -1199,21 +1231,43 @@ depende de tu **perfil de riesgo** (lo ajustas en la barra izquierda)."""
                 st.session_state.views=[v for v in st.session_state.views if v.get("asset")!=rm and v.get("long")!=rm and v.get("short")!=rm]
                 st.rerun()
         if _precios_rv:
-            _color = "#2ca02c" if _suma_rv<=capital else "#d6604d"
+            _sm_s = st.session_state.get("_moneda_capital","$")
+            # _suma_rv está en USD; capital está en la moneda del usuario.
+            # Convertir la suma a la moneda del usuario para comparar en la misma base.
+            _suma_disp = _suma_rv * (tipo_cambio_usdpen() if _sm_s=="S/" else 1.0)
+            _color = "#2ca02c" if _suma_disp<=capital else "#d6604d"
             _monedas_rv = set(BVL_CURRENCY.get(t,"USD") for t in st.session_state.tickers if t in _precios_rv)
             st.markdown(f"<div style='margin-top:6px; padding-top:6px; border-top:1px solid #e6edf5; "
-                        f"font-size:0.85rem;'>Suma en dólares: <b style='color:{_color};'>${_suma_rv:,.2f}</b> "
-                        f"de ${capital:,.0f}</div>", unsafe_allow_html=True)
-            if len(_monedas_rv)>1 or _monedas_rv=={"PEN"}:
-                st.caption(f"💱 Precios en soles convertidos a USD con tipo de cambio "
-                           f"S/{tipo_cambio_usdpen():.3f} por dólar (fuente: Yahoo Finance).")
+                        f"font-size:0.85rem;'>Suma de 1 acción c/u: "
+                        f"<b style='color:{_color};'>{_sm_s} {_suma_disp:,.2f}</b> "
+                        f"de tu monto de {_sm_s} {capital:,.0f}</div>", unsafe_allow_html=True)
+            if _suma_disp > capital:
+                st.warning(f"⚠️ Con {_sm_s} {capital:,.0f} no alcanza para comprar al menos "
+                           f"una acción de cada una (necesitas ~{_sm_s} {_suma_disp:,.0f}). "
+                           f"Sube el monto a invertir o quita algún activo.")
+            if _monedas_rv=={"USD"} and _sm_s=="S/":
+                st.caption(f"💱 Precios en dólares convertidos a soles · T.C. S/{tipo_cambio_usdpen():.3f}")
+            elif _monedas_rv=={"PEN"} and _sm_s=="$":
+                st.caption(f"💱 Precios en soles convertidos a dólares · T.C. S/{tipo_cambio_usdpen():.3f}")
     with lb:
         st.caption(f"**🟢 Renta fija ({len(st.session_state.rf_tickers)})**")
-        # Toggle FICO
-        include_fico = st.checkbox("Incluir Fondo de inversión Coril (6.25%)", value=True, key="fico_toggle")
-        st.session_state.include_fico = include_fico
-        if include_fico:
-            st.caption(f"✓ {FICO_DISPLAY} · {FICO.ret_annual:.2%} anual")
+        # Selector de FICO: ninguno, soles o dólares
+        _fico_opts = ["No incluir", "FICO Soles (7%)", "FICO Dólares (6%)"]
+        _fico_sel = st.radio("Fondo de inversión Coril (FICO)", _fico_opts,
+                             index=1, key="fico_sel_radio",
+                             help="Elige el FICO de Coril según la moneda. Se añade a renta fija.")
+        if _fico_sel == "FICO Soles (7%)":
+            st.session_state.include_fico = True
+            st.session_state.fico_choice = "FICO_PEN"
+            st.caption("✓ FICO Coril Soles · 7.00% anual en S/")
+        elif _fico_sel == "FICO Dólares (6%)":
+            st.session_state.include_fico = True
+            st.session_state.fico_choice = "FICO_USD"
+            st.caption("✓ FICO Coril Dólares · 6.00% anual en US$")
+        else:
+            st.session_state.include_fico = False
+            st.session_state.fico_choice = None
+        include_fico = st.session_state.include_fico
         for i,t in enumerate(st.session_state.rf_tickers):
             c1,c2=st.columns([5,1])
             _n=nombre_activo(t)
@@ -1501,14 +1555,16 @@ if show_tab3:
             nw={}
             with col_a:
                 for a in assets[:mid]:
-                    ic="🟢" if a==FICO_TK else "🔵"
+                    ic="🟢" if es_renta_fija(a) else "🔵"
                     nw[a]=st.number_input(f"{ic} {disp(a)}",0.0,100.0,round(float(res.weights[a])*100,1),0.5,"%.1f",key=f"s_{_wv}_{a}")
             with col_b:
                 for a in assets[mid:]:
-                    ic="🟢" if a==FICO_TK else "🔵"
+                    ic="🟢" if es_renta_fija(a) else "🔵"
                     nw[a]=st.number_input(f"{ic} {disp(a)}",0.0,100.0,round(float(res.weights[a])*100,1),0.5,"%.1f",key=f"s_{_wv}_{a}")
             wn=pd.Series(nw); tot=wn.sum(); wnorm=wn/tot if tot>0 else wn/100; st.session_state.manual_weights=wnorm
-            eqw=float(wnorm[[a for a in wnorm.index if a!=FICO_TK]].sum()); fiw=float(wnorm.get(FICO_TK,0))
+            # Renta fija = FICO + bonos/ETFs de RF; renta variable = el resto
+            fiw=float(wnorm[[a for a in wnorm.index if es_renta_fija(a)]].sum())
+            eqw=float(wnorm[[a for a in wnorm.index if not es_renta_fija(a)]].sum())
             with col_r:
                 st.metric("RV",f"{eqw:.1%}",delta=f"{eqw-eq_t:+.1%}"); st.metric("RF",f"{fiw:.1%}",delta=f"{fiw-fi_t:+.1%}")
                 st.caption(f"Suma: {tot:.0f}%{'✅' if abs(tot-100)<0.5 else ' ⚠️→100%'}")
@@ -1618,6 +1674,7 @@ if show_tab3:
 
                 st.markdown("**🔵 Acciones (se compran por unidades enteras)**")
                 _filas_acc=[]
+                _plan_detalle=[]   # para el mensaje: nec/alc por acción
                 _monto_optimo_acc=0.0   # costo de comprar el óptimo completo (acciones), en USD
                 _monto_alcanza_acc=0.0  # costo de lo que sí alcanza, en USD
                 _sm_a = st.session_state.get("_moneda_capital","$")
@@ -1632,13 +1689,14 @@ if show_tab3:
                     _alcanzan=_unid.get(a,0)
                     _monto_optimo_acc += _necesarias*_precio
                     _monto_alcanza_acc += _alcanzan*_precio
+                    _plan_detalle.append({"tk":a,"nec":_necesarias,"alc":_alcanzan})
                     _filas_acc.append({
                         "Empresa": nombre_activo(a),
-                        "Precio x acción": money(_precio*_fx_a),
+                        f"Precio x acción ({_sm_a})": money(_precio*_fx_a),
                         "Necesarias (óptimo)": f"{_necesarias}",
                         "Te alcanzan": f"{_alcanzan}",
                         "Faltan por comprar": f"{max(0,_necesarias-_alcanzan)}",
-                        "Costo del óptimo": money(_necesarias*_precio*_fx_a),
+                        f"Monto necesario ({_sm_a})": money(_necesarias*_precio*_fx_a),
                     })
                 if _filas_acc:
                     st.dataframe(pd.DataFrame(_filas_acc),use_container_width=True,hide_index=True)
@@ -1694,21 +1752,24 @@ if show_tab3:
 
                 # Mensaje sobre el monto mínimo (en moneda del usuario)
                 _cap_usd=st.session_state.get('_capital_usd',capital)
-                if _monto_minimo > _cap_usd*1.08:
-                    _falta_usd=_monto_minimo-_cap_usd
+                # ¿Faltan acciones por comprar? (más fiable que un margen porcentual)
+                _faltan_acciones = any(
+                    max(0, _fa["nec"]-_fa["alc"])>0 for _fa in _plan_detalle)
+                if _monto_minimo > _cap_usd or _faltan_acciones:
+                    _falta_usd=max(0,_monto_minimo-_cap_usd)
                     st.warning(
-                        f"📌 **Para armar el portafolio óptimo completo necesitas al menos "
-                        f"{money(_monto_minimo*_fx)}.**\n\n"
-                        f"Con tu monto actual de {money(capital)} te faltan aproximadamente "
-                        f"**{money(_falta_usd*_fx)}** para comprar todas las acciones necesarias "
-                        f"en las proporciones ideales. Puedes subir el monto a invertir, o quedarte "
-                        f"con la cartera que sí alcanza (mostrada arriba)."
+                        f"📌 **Con {money(capital)} no alcanza para el portafolio óptimo completo.**\n\n"
+                        f"Para comprar todas las acciones en las proporciones ideales necesitas "
+                        f"al menos **{money(_monto_minimo*_fx)}**"
+                        + (f" (te faltan ~{money(_falta_usd*_fx)})" if _falta_usd>0 else "")
+                        + ". Sube el monto a invertir, o usa la cartera ajustada de arriba "
+                        f"(que sí alcanza con tu monto actual)."
                     )
                 else:
                     st.success(
-                        f"✅ **Tu monto de {money(capital)} alcanza para armar el portafolio óptimo "
-                        f"completo** (costo mínimo aproximado: {money(_monto_minimo*_fx)}). "
-                        f"El sobrante se coloca en el Fondo de inversión / renta fija."
+                        f"✅ **Tu monto de {money(capital)} alcanza para el portafolio óptimo "
+                        f"completo** (costo aproximado: {money(_monto_minimo*_fx)}). "
+                        f"El sobrante se coloca en renta fija / fondo."
                     )
 
 
@@ -1741,10 +1802,14 @@ if show_tab3:
             COL_BMKS   = ["#C9A227","#8B8B8B","#B07156","#5B8A72","#8C6BAE"]  # dorado, gris, terracota...
             COL_DD     = "#B23A48"   # rojo vino para drawdown
 
+            # Fecha de inicio real del rango visible (para que quede claro que
+            # empieza HOY hace N años, no el 1 de enero)
+            _fecha_ini = wl.index.min().strftime("%d/%m/%Y")
+            _fecha_fin = wl.index.max().strftime("%d/%m/%Y")
             fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.7,.3],
                              vertical_spacing=.06,
                              subplot_titles=[
-                                 f"<b>Crecimiento de tu inversión</b>  ·  {_sm} {capital:,.0f} inicial  ·  últimos {cy} años",
+                                 f"<b>Crecimiento de tu inversión</b>  ·  {_sm} {capital:,.0f} invertidos el {_fecha_ini}  ·  al {_fecha_fin}",
                                  "<b>Caídas desde máximos (drawdown)</b>"])
 
             # Portafolio: línea + área rellena
