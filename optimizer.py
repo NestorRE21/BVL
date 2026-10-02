@@ -305,11 +305,22 @@ def market_weights(assets: Sequence[str], equity_assets: Sequence[str],
 
 
 def equilibrium_returns(cov: pd.DataFrame, w_mkt: pd.Series,
-                        risk_aversion: float, rf_annual: float) -> pd.Series:
-    """Π = λ·Σ·w_mkt (exceso) + Rf → retorno total de equilibrio."""
+                        risk_aversion: float, rf_annual: float,
+                        max_excess: float = 0.40) -> pd.Series:
+    """
+    Π = λ·Σ·w_mkt (exceso) + Rf → retorno total de equilibrio.
+
+    max_excess: tope al retorno EN EXCESO sobre Rf (default 40%). Protege
+    contra acciones con datos sucios cuya volatilidad artificialmente alta
+    dispararía el retorno de equilibrio a niveles absurdos (ej. +199%).
+    Un retorno en exceso de 40% ya es altísimo para cualquier acción real;
+    valores mayores casi siempre indican datos corruptos, no oportunidad.
+    """
     assets    = list(cov.index)
     w         = w_mkt.reindex(assets).fillna(0.0).to_numpy()
     pi_excess = risk_aversion * (cov.to_numpy() @ w)
+    # Recortar el exceso a un rango sensato [−max_excess, +max_excess]
+    pi_excess = np.clip(pi_excess, -max_excess, max_excess)
     return pd.Series(pi_excess + rf_annual, index=assets, name="equilibrium")
 
 
@@ -970,5 +981,4 @@ def efficient_frontier(mu: pd.Series, cov: pd.DataFrame,
     if not pts:
         return pd.DataFrame(columns=["ret", "vol"])
     df = pd.DataFrame(pts, columns=["ret", "vol"]).sort_values("vol")
-    return df.reset_index(drop=True)
     return df.reset_index(drop=True)
