@@ -306,15 +306,15 @@ def market_weights(assets: Sequence[str], equity_assets: Sequence[str],
 
 def equilibrium_returns(cov: pd.DataFrame, w_mkt: pd.Series,
                         risk_aversion: float, rf_annual: float,
-                        max_excess: float = 0.40) -> pd.Series:
+                        max_excess: float = 0.20) -> pd.Series:
     """
     Π = λ·Σ·w_mkt (exceso) + Rf → retorno total de equilibrio.
 
-    max_excess: tope al retorno EN EXCESO sobre Rf (default 40%). Protege
+    max_excess: tope al retorno EN EXCESO sobre Rf (default 20%). Protege
     contra acciones con datos sucios cuya volatilidad artificialmente alta
     dispararía el retorno de equilibrio a niveles absurdos (ej. +199%).
-    Un retorno en exceso de 40% ya es altísimo para cualquier acción real;
-    valores mayores casi siempre indican datos corruptos, no oportunidad.
+    Un retorno en exceso de 20% sobre la tasa libre ya es muy optimista para
+    una acción real; valores mayores casi siempre indican datos corruptos.
     """
     assets    = list(cov.index)
     w         = w_mkt.reindex(assets).fillna(0.0).to_numpy()
