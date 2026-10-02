@@ -385,9 +385,12 @@ def _yf_period(period):
         return {"start": (pd.Timestamp.today()-pd.DateOffset(years=years)).strftime("%Y-%m-%d")}
     return {"period": period}
 
+_CLEAN_VER = "v3_winsor_volcap"  # cambiar esto invalida el caché de precios BVL
+
 @st.cache_data(show_spinner=False,ttl=600)
-def dl_eq(tickers,period="15y"):
-    """Renta variable: SOLO acciones de la BVL (por API BVL)."""
+def dl_eq(tickers,period="15y",clean_ver=_CLEAN_VER):
+    """Renta variable: SOLO acciones de la BVL (por API BVL).
+    clean_ver fuerza invalidación de caché cuando cambia la lógica de limpieza."""
     tickers=[t.strip().upper() for t in tickers if t and t.strip()]
     if not tickers: return None
     cid,csec,key=_get_creds()
