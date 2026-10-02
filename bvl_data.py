@@ -249,17 +249,31 @@ def download_prices(tickers, start, end, client_id, client_secret, api_key):
         if dias_malos.any():
             log_ret.loc[dias_malos] = 0.0
 
-    # Red de seguridad: saltos individuales grandes (25% diario en una acción
-    # casi siempre es dato sucio, no movimiento real de mercado peruano).
-    log_ret = log_ret.mask(log_ret.abs() > 0.25, np.nan)
+    # Red de seguridad: saltos individuales grandes. En el mercado peruano un
+    # salto diario > 15% casi siempre es dato sucio (baja liquidez, error de
+    # captura), no un movimiento real. Se neutraliza.
+    log_ret = log_ret.mask(log_ret.abs() > 0.15, np.nan)
 
-    # Winsorización por activo: recorta el 1% más extremo de cada cola.
-    # Suaviza outliers residuales (baja liquidez) sin borrar la señal real.
+    # Winsorización por activo: recorta el 2.5% más extremo de cada cola.
+    # Suaviza outliers residuales sin borrar la tendencia real.
     for col in log_ret.columns:
         s = log_ret[col].dropna()
         if len(s) > 50:
-            lo, hi = s.quantile(0.01), s.quantile(0.99)
+            lo, hi = s.quantile(0.025), s.quantile(0.975)
             log_ret[col] = log_ret[col].clip(lo, hi)
+
+    # Tope de volatilidad por activo: si tras limpiar una acción aún tiene
+    # volatilidad anual > 55% (irreal para una acción BVL), sus datos siguen
+    # corruptos → reescalar sus retornos para llevarla a un máximo sensato.
+    PPY_APROX = 252
+    VOL_MAX = 0.55
+    for col in log_ret.columns:
+        s = log_ret[col].dropna()
+        if len(s) > 50:
+            vol_anual = s.std(ddof=1) * np.sqrt(PPY_APROX)
+            if vol_anual > VOL_MAX:
+                factor = VOL_MAX / vol_anual
+                log_ret[col] = log_ret[col] * factor
 
     log_ret = log_ret.dropna(how="all")
     return log_ret
