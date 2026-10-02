@@ -594,6 +594,10 @@ def black_litterman(cov: pd.DataFrame, pi: pd.Series, P: np.ndarray,
     mu_excess = M @ (inv_tau_cov @ Pi_excess + P.T @ inv_omega @ Q_excess)
 
     sigma_bl  = nearest_psd(Sigma + M, ridge)
+    # Cap al retorno EN EXCESO del posterior (no solo del equilibrio):
+    # las views de Grinold-Kahn pueden inflar el retorno por encima del
+    # equilibrio. Tope ±20% en exceso sobre Rf para mantener realismo.
+    mu_excess = np.clip(mu_excess, -0.20, 0.20)
     ret_bl    = mu_excess + config.rf_annual
 
     return (pd.Series(ret_bl, index=assets, name="ret_bl"),
