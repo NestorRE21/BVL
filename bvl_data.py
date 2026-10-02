@@ -249,7 +249,17 @@ def download_prices(tickers, start, end, client_id, client_secret, api_key):
         if dias_malos.any():
             log_ret.loc[dias_malos] = 0.0
 
-    # Red de seguridad: saltos individuales residuales muy grandes
-    log_ret = log_ret.mask(log_ret.abs() > 0.40, 0.0)
+    # Red de seguridad: saltos individuales grandes (25% diario en una acción
+    # casi siempre es dato sucio, no movimiento real de mercado peruano).
+    log_ret = log_ret.mask(log_ret.abs() > 0.25, np.nan)
+
+    # Winsorización por activo: recorta el 1% más extremo de cada cola.
+    # Suaviza outliers residuales (baja liquidez) sin borrar la señal real.
+    for col in log_ret.columns:
+        s = log_ret[col].dropna()
+        if len(s) > 50:
+            lo, hi = s.quantile(0.01), s.quantile(0.99)
+            log_ret[col] = log_ret[col].clip(lo, hi)
+
     log_ret = log_ret.dropna(how="all")
     return log_ret
