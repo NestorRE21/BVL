@@ -229,6 +229,18 @@ def estimate_covariance(returns: pd.DataFrame, periods_per_year: int = 52,
         cov = np.cov(X, rowvar=False, ddof=1)
 
     cov_annual = nearest_psd(cov * periods_per_year, epsilon=ridge)
+
+    # ── Tope de volatilidad por activo (robustez ante datos sucios) ──
+    # Si una acción tiene volatilidad anual > 45% casi siempre es por datos
+    # corruptos de baja liquidez, no riesgo real. Se reescala su fila/columna
+    # para que su volatilidad no pase de 45%, preservando las correlaciones.
+    VOL_MAX = 0.45
+    diag = np.sqrt(np.clip(np.diag(cov_annual), EPS, None))
+    factor = np.minimum(1.0, VOL_MAX / diag)
+    # Reescalar: cov'[i,j] = cov[i,j] · factor[i] · factor[j]
+    F = np.outer(factor, factor)
+    cov_annual = nearest_psd(cov_annual * F, epsilon=ridge)
+
     return pd.DataFrame(cov_annual, index=clean.columns, columns=clean.columns)
 
 
@@ -306,7 +318,7 @@ def market_weights(assets: Sequence[str], equity_assets: Sequence[str],
 
 def equilibrium_returns(cov: pd.DataFrame, w_mkt: pd.Series,
                         risk_aversion: float, rf_annual: float,
-                        max_excess: float = 0.20) -> pd.Series:
+                        max_excess: float = 0.15) -> pd.Series:
     """
     Π = λ·Σ·w_mkt (exceso) + Rf → retorno total de equilibrio.
 
@@ -596,8 +608,8 @@ def black_litterman(cov: pd.DataFrame, pi: pd.Series, P: np.ndarray,
     sigma_bl  = nearest_psd(Sigma + M, ridge)
     # Cap al retorno EN EXCESO del posterior (no solo del equilibrio):
     # las views de Grinold-Kahn pueden inflar el retorno por encima del
-    # equilibrio. Tope ±20% en exceso sobre Rf para mantener realismo.
-    mu_excess = np.clip(mu_excess, -0.20, 0.20)
+    # equilibrio. Tope ±15% en exceso sobre Rf para mantener realismo.
+    mu_excess = np.clip(mu_excess, -0.15, 0.15)
     ret_bl    = mu_excess + config.rf_annual
 
     return (pd.Series(ret_bl, index=assets, name="ret_bl"),
