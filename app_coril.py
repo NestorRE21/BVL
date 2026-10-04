@@ -1612,12 +1612,53 @@ if show_tab3:
                 st.metric("RV",f"{eqw:.1%}",delta=f"{eqw-eq_t:+.1%}"); st.metric("RF",f"{fiw:.1%}",delta=f"{fiw-fi_t:+.1%}")
                 st.caption(f"Suma: {tot:.0f}%{'✅' if abs(tot-100)<0.5 else ' ⚠️→100%'}")
 
+            # ── CAP DE SEGURIDAD FINAL (en la app, independiente del optimizer) ──
+            # Garantiza retornos y volatilidad realistas aunque el optimizer
+            # entregue valores inflados por datos sucios de la BVL.
+            RET_MAX_EXCESO = 0.15   # máx 15% sobre la tasa libre por activo
+            VOL_MAX_ACT = 0.45      # máx 45% de volatilidad anual por activo
+            # 1) Capear retornos BL por activo
+            _bl = res.bl_returns.copy()
+            _bl = _bl.clip(RF - RET_MAX_EXCESO, RF + RET_MAX_EXCESO)
+            # El FICO conserva su retorno forzado real (no se capa)
+            for _ft,_fd in FICOS.items():
+                if _ft in _bl.index: _bl[_ft]=_fd["obj"].ret_annual
+            # 2) Capear volatilidad en la covarianza (reescalar preservando correl.)
+            _cov = res.cov_matrix.copy()
+            _diag = np.sqrt(np.clip(np.diag(_cov.to_numpy()), 1e-12, None))
+            _fac = np.minimum(1.0, VOL_MAX_ACT/_diag)
+            _covv = _cov.to_numpy()*np.outer(_fac,_fac)
+            _cov = pd.DataFrame(_covv, index=_cov.index, columns=_cov.columns)
+            # Guardar versiones capeadas para usar en métricas, gráficos y Monte Carlo
+            res.bl_returns = _bl
+            res.cov_matrix = _cov
+
             # Métricas dinámicas
             w_np=wnorm.reindex(res.bl_returns.index).fillna(0).to_numpy()
             mu_np=res.bl_returns.to_numpy(); S_np=res.cov_matrix.to_numpy()
             b_np=st.session_state.betas.reindex(res.bl_returns.index).fillna(1).to_numpy()
             p_r=float(w_np@mu_np); p_v=float(np.sqrt(max(w_np@S_np@w_np,1e-10)))
             p_sh=(p_r-RF)/p_v if p_v>1e-10 else 0; p_bt=float(w_np@b_np)
+
+            # ── DIAGNÓSTICO TEMPORAL: de dónde sale el retorno/riesgo ──
+            with st.expander("🔬 Diagnóstico de métricas (temporal)"):
+                _diag=[]
+                for a in res.bl_returns.index:
+                    _vol_a = float(np.sqrt(res.cov_matrix.loc[a,a])) if a in res.cov_matrix.index else 0
+                    _diag.append({
+                        "Activo": a,
+                        "Peso": f"{wnorm.get(a,0):.1%}",
+                        "Retorno esperado (BL)": f"{res.bl_returns[a]:+.1%}",
+                        "Equilibrio (Π)": f"{res.equilibrium.get(a,0):+.1%}",
+                        "Volatilidad anual": f"{_vol_a:.1%}",
+                    })
+                st.dataframe(pd.DataFrame(_diag), use_container_width=True, hide_index=True)
+                st.caption(f"Retorno portafolio = Σ(peso×retorno) = {p_r:.1%}  ·  "
+                           f"Riesgo portafolio = {p_v:.1%}  ·  "
+                           f"_CLEAN_VER activo: {_CLEAN_VER}")
+                st.caption("Si alguna acción muestra volatilidad >55% o retorno >22%, "
+                           "los filtros NO se están aplicando (revisa que subiste optimizer.py "
+                           "y bvl_data.py, y que limpiaste caché + redescargaste).")
             st.markdown("##### 🎯 Métricas esperadas del portafolio")
             st.caption("Esto es lo que el modelo espera de tu cartera. Pasa el cursor sobre el "
                        "signo ❓ de cada número para entender qué significa.")
