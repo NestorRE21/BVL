@@ -1644,7 +1644,9 @@ if show_tab3:
             # Garantiza retornos y volatilidad realistas aunque el optimizer
             # entregue valores inflados por datos sucios de la BVL.
             RET_MAX_EXCESO = 0.15   # máx 15% sobre la tasa libre por activo
-            VOL_MAX_ACT = 0.45      # máx 45% de volatilidad anual por activo
+            VOL_MAX_ACT = 0.35      # máx 35% vol anual: evita colas absurdas en
+                                    # el Monte Carlo (GBM) a 3-5 años por el
+                                    # efecto exponencial del interés compuesto
             # 1) Capear retornos BL por activo
             _bl = res.bl_returns.copy()
             _bl = _bl.clip(RF - RET_MAX_EXCESO, RF + RET_MAX_EXCESO)
@@ -2287,14 +2289,28 @@ if show_tab4:
                               legend=dict(orientation="h",y=-0.12))
             st.plotly_chart(fig2,use_container_width=True,key="chart_mc_gbm",config={"displayModeBar":False})
 
+            # ¿Qué tan raro es el mejor caso? % de simulaciones que llegan al menos
+            # al doble del escenario base (para dimensionar lo improbable).
+            _umbral_euforia = p50_val * 2
+            _pct_sobre = float((terminal >= _umbral_euforia).mean()) * 100
+            _pct_mejor = float((terminal >= gbm_max * 0.95).mean()) * 100
+
             # Interpretación GBM
             st.info(
                 f"**Cómo leer este gráfico:** cada línea gris es un camino posible que tu inversión "
-                f"podría recorrer, semana a semana. En el mejor de todos llegó a **{usd(gbm_max)}** "
-                f"y en el peor bajó hasta **{usd(gbm_min)}**. "
-                f"Estos extremos son más amplios que el rango del gráfico anterior "
-                f"({usd(p5_val)} – {usd(p95_val)}) porque aquí ves los casos más raros de "
-                f"{len(terminal):,} simulaciones, no solo lo que pasa la mayoría de las veces."
+                f"podría recorrer, semana a semana. La línea azul es el camino típico (mediana). "
+                f"El verde fue el mejor de las {len(terminal):,} simulaciones y el rojo el peor."
+            )
+
+            # ── ADVERTENCIA sobre el mejor caso (evitar euforia del inversionista) ──
+            st.warning(
+                f"⚠️ **No tomes el mejor caso ({usd(gbm_max)}) como una expectativa.** "
+                f"Es el resultado más afortunado de {len(terminal):,} simulaciones — "
+                f"solo alrededor del **{max(_pct_mejor,0.02):.1f}%** de los escenarios se le acerca. "
+                f"Lo realista es fijarse en el **escenario base ({usd(p50_val)})**, que es lo que "
+                f"ocurre la mitad de las veces. Un resultado tan alto dependería de una racha "
+                f"excepcional de buenos años seguidos, algo muy poco probable. "
+                f"Planifica con el escenario base, no con el mejor caso."
             )
 
             with st.expander("🔬 ¿Qué es el Movimiento Browniano Geométrico y de dónde sale?"):
@@ -2337,7 +2353,7 @@ conjunto de futuros posibles."""
 
 **El primer gráfico (bandas)** te muestra lo que pasa la mayoría de las veces. Deja fuera el 5% de casos más extremos por arriba y por abajo. En palabras simples: *en 9 de cada 10 futuros posibles, tu inversión termina entre {usd(p5_val)} y {usd(p95_val)}*. Esta es la vista que conviene usar para planificar.
 
-**El segundo gráfico (trayectorias)** te muestra todos los caminos, incluidos los más raros: el mejor de todos llegó a {usd(gbm_max)} y el peor bajó a {usd(gbm_min)}. Son casos muy poco probables (menos de 2 de cada 10,000), pero existen.
+**El segundo gráfico (trayectorias)** te muestra los caminos posibles, incluidos los extremos: el mejor de todas las simulaciones llegó a {usd(gbm_max)} y el peor bajó a {usd(gbm_min)}. ⚠️ **Importante:** el mejor caso es un resultado afortunadísimo (uno entre miles) y no debe tomarse como meta ni expectativa. Para planificar, usa siempre el escenario base (la mediana), que es lo que ocurre la mitad de las veces.
 
 **¿En cuál fijarse?** Para tomar decisiones, usa el rango del primer gráfico. El segundo sirve para entender que el camino no es una línea recta: aunque termines cerca de lo esperado, en el trayecto puede haber subidas y bajadas fuertes. Si esos caminos grises se ven muy movidos, el portafolio podría estar más tranquilo con algo más de renta fija."""
                 )
