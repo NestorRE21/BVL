@@ -140,9 +140,14 @@ def monte_carlo(weights: pd.Series, mu_bl: pd.Series, cov_bl: pd.DataFrame,
 
     n_steps = int(horizon_years * periods_per_year)
 
+    # Para consistencia entre horizontes: generar SIEMPRE el máximo horizonte
+    # posible (10 años) con la misma semilla, y recortar a n_steps. Así la
+    # proyección a 1 año es exactamente el primer año de la de 3, 5 o 10 años,
+    # y nunca puede salir "más pesimista a 1 año que a 3" por ruido de muestreo.
+    MAX_STEPS = 10 * periods_per_year
     rng = np.random.default_rng(seed)
-    # Generar retornos multivariados: (n_sims, n_steps, n_assets)
-    sims = rng.multivariate_normal(mu_period, cov_period, size=(n_sims, n_steps))
+    sims_full = rng.multivariate_normal(mu_period, cov_period, size=(n_sims, MAX_STEPS))
+    sims = sims_full[:, :n_steps]
 
     # Retorno del portafolio por período: (n_sims, n_steps)
     port_rets = sims @ w
