@@ -750,81 +750,121 @@ def generar_excel(res, wnorm, capital, mc=None):
     bd = st.session_state.bench_rets or {}
     buf = BytesIO()
 
+    _sm = st.session_state.get("_moneda_capital","$")
+    _fx = tipo_cambio_usdpen() if _sm=="S/" else 1.0
+    def _fuente(a):
+        if es_fico(a): return "FICO Coril"
+        if a in BVL_SECTORS and len(a) >= 6 and a[-1].isdigit(): return "Bolsa de Lima (BVL)"
+        return "Yahoo Finance"
+
     with pd.ExcelWriter(buf, engine="openpyxl") as xl:
-        # ── HOJA 1: Retornos anualizados por plazo (1 a 15 años) ──
+        # ── HOJA 0: PORTADA / cómo leer este archivo ──
+        portada = pd.DataFrame({
+            "GUÍA RÁPIDA — Cómo leer este archivo": [
+                f"Fecha de generación: {pd.Timestamp.today():%d/%m/%Y}",
+                f"Monto simulado: {_sm} {capital:,.0f}",
+                "",
+                "Este archivo tiene varias hojas (pestañas abajo). Esto es cada una:",
+                "",
+                "1) 'Rendimiento por años' — Cuánto rindió en promedio cada año",
+                "   cada inversión, mirando distintos plazos hacia atrás (1 a 15 años).",
+                "   Un número positivo = ganó; negativo = perdió. La última fila es",
+                "   tu portafolio completo (la mezcla de todas tus inversiones).",
+                "",
+                "2) 'Historia del portafolio' — El valor de tu inversión día a día",
+                "   en el pasado, como si hubieras invertido desde el inicio. Incluye",
+                "   la 'caída' (cuánto bajó desde su punto más alto) y los índices de",
+                "   comparación (benchmarks).",
+                "",
+                "3) 'Qué tienes y cuánto' — La lista de tus inversiones: nombre,",
+                "   sector, moneda, qué porcentaje ocupa cada una y de dónde salen",
+                "   los datos.",
+                "",
+                "4) 'Proyección a futuro' — Estimación de cuánto podría valer tu",
+                "   inversión en los próximos años, en distintos escenarios (del más",
+                "   pesimista al más optimista).",
+                "",
+                "IMPORTANTE: las proyecciones son estimaciones, no promesas. El",
+                "escenario más realista para planificar es el 'Central' (lo que",
+                "ocurre la mitad de las veces). El escenario optimista es poco",
+                "probable y no debe tomarse como meta.",
+            ]
+        })
+        portada.to_excel(xl, sheet_name="Cómo leer esto", index=False)
+
+        # ── HOJA 1: Rendimiento por años ──
         plazos = list(range(1, 16))
         hoy = rets_full.index.max()
         filas = []
-        activos = [a for a in wnorm.index if a in rets_full.columns] + \
-                  [a for a in wnorm.index if a == FICO_TK]
-        # Retorno anualizado de cada activo para cada ventana de N años
         for a in wnorm.index:
-            fila = {"Activo": nombre_activo(a), "Ticker": a, "Peso": f"{wnorm[a]:.2%}"}
+            fila = {"Inversión": nombre_activo(a),
+                    "Código": a,
+                    "Cuánto tienes (%)": wnorm[a]}
             for p in plazos:
                 ini = hoy - pd.DateOffset(years=p)
-                if a == FICO_TK:
-                    fila[f"{p}a"] = FICO.ret_annual  # retorno constante forzado
+                etiqueta = "Hace 1 año" if p==1 else f"Hace {p} años"
+                if a == FICO_TK or es_fico(a):
+                    fila[etiqueta] = FICO.ret_annual
                 elif a in rets_full.columns:
                     s = rets_full.loc[rets_full.index >= ini, a].dropna()
-                    if len(s) > 20:
-                        ann = np.exp(s.mean() * PPY) - 1  # retorno anualizado geométrico
-                        fila[f"{p}a"] = ann
-                    else:
-                        fila[f"{p}a"] = None
+                    fila[etiqueta] = (np.exp(s.mean()*PPY)-1) if len(s)>20 else None
                 else:
-                    fila[f"{p}a"] = None
+                    fila[etiqueta] = None
             filas.append(fila)
-        # Fila del PORTAFOLIO (retorno ponderado por plazo)
-        fila_port = {"Activo": "PORTAFOLIO", "Ticker": "—", "Peso": "100%"}
+        fila_port = {"Inversión": "➡️ TU PORTAFOLIO (todo junto)", "Código": "—", "Cuánto tienes (%)": 1.0}
         for p in plazos:
             ini = hoy - pd.DateOffset(years=p)
+            etiqueta = "Hace 1 año" if p==1 else f"Hace {p} años"
             eq = [a for a in wnorm.index if a in rets_full.columns]
             pr = sum(wnorm.get(c,0)*rets_full.loc[rets_full.index>=ini, c].fillna(0) for c in eq)
             if FICO_TK in wnorm.index:
                 pr = pr + wnorm[FICO_TK]*(np.log(1+FICO.ret_annual)/PPY)
             pr = pr.dropna()
-            fila_port[f"{p}a"] = np.exp(pr.mean()*PPY)-1 if len(pr)>20 else None
+            fila_port[etiqueta] = (np.exp(pr.mean()*PPY)-1) if len(pr)>20 else None
         filas.append(fila_port)
         df_ret = pd.DataFrame(filas)
-        df_ret.to_excel(xl, sheet_name="Retornos por plazo", index=False)
+        df_ret.to_excel(xl, sheet_name="Rendimiento por años", index=False)
 
-        # ── HOJA 2: Histórico del portafolio (wealth + drawdown) ──
+        # ── HOJA 2: Historia del portafolio ──
         pr, wl, dd, bw, bdd = wdd(wnorm, rets, bd, capital)
         hist = pd.DataFrame({
             "Fecha": wl.index,
-            "Valor portafolio": wl.values,
-            "Retorno diario": pr.values,
-            "Drawdown": dd.values,
+            f"Valor de tu inversión ({_sm})": (wl.values*_fx),
+            "Cuánto subió/bajó ese día (%)": pr.values,
+            "Caída desde el punto más alto (%)": dd.values,
         })
         for n, serie in bw.items():
-            hist[f"Benchmark {n}"] = serie.reindex(wl.index).values
-        hist.to_excel(xl, sheet_name="Historico portafolio", index=False)
+            hist[f"Índice {nombre_activo(n)} ({_sm})"] = serie.reindex(wl.index).values*_fx
+        hist.to_excel(xl, sheet_name="Historia del portafolio", index=False)
 
-        # ── HOJA 3: Composición ──
+        # ── HOJA 3: Qué tienes y cuánto ──
         comp = pd.DataFrame({
-            "Activo": [nombre_activo(a) for a in wnorm.index],
-            "Ticker": list(wnorm.index),
+            "Inversión": [nombre_activo(a) for a in wnorm.index],
+            "Código": list(wnorm.index),
             "Sector": [BVL_SECTORS.get(a, "—") for a in wnorm.index],
-            "Moneda": [BVL_CURRENCY.get(a, "USD") for a in wnorm.index],
-            "Peso": [wnorm[a] for a in wnorm.index],
-            "Retorno esperado (BL)": [res.bl_returns.get(a, None) for a in wnorm.index],
+            "Moneda": ["Soles" if BVL_CURRENCY.get(a,"USD")=="PEN" else "Dólares" for a in wnorm.index],
+            "Cuánto tienes (%)": [wnorm[a] for a in wnorm.index],
+            "Rendimiento que se espera al año (%)": [res.bl_returns.get(a, None) for a in wnorm.index],
+            "De dónde salen los datos": [_fuente(a) for a in wnorm.index],
         })
-        comp.to_excel(xl, sheet_name="Composicion", index=False)
+        comp.to_excel(xl, sheet_name="Qué tienes y cuánto", index=False)
 
-        # ── HOJA 4: Proyecciones Monte Carlo ──
+        # ── HOJA 4: Proyección a futuro (resumen de escenarios) ──
         if mc is not None:
-            proj = pd.DataFrame({"Fecha": mc.dates})
-            for p in [5, 10, 25, 50, 75, 90, 95]:
-                proj[f"P{p}"] = mc.percentiles[p]
-            proj["Media"] = mc.mean_path
-            proj.to_excel(xl, sheet_name="Proyeccion MonteCarlo", index=False)
-            # Resumen de escenarios terminales
+            etiquetas = {5:"Muy pesimista (P5)",10:"Pesimista (P10)",25:"Conservador (P25)",
+                         50:"⭐ Más probable (P50)",75:"Favorable (P75)",90:"Optimista (P90)",
+                         95:"Muy optimista (P95)"}
             resumen = pd.DataFrame({
-                "Escenario": ["Pesimista P5","P10","P25","Central P50","P75","P90","Optimista P95"],
-                "Valor final": [mc.percentiles[p][-1] for p in [5,10,25,50,75,90,95]],
-                "Retorno total": [mc.percentiles[p][-1]/mc.capital-1 for p in [5,10,25,50,75,90,95]],
+                "Escenario": [etiquetas[p] for p in [5,10,25,50,75,90,95]],
+                f"Valor estimado ({_sm})": [mc.percentiles[p][-1] for p in [5,10,25,50,75,90,95]],
+                "Ganancia o pérdida (%)": [mc.percentiles[p][-1]/mc.capital-1 for p in [5,10,25,50,75,90,95]],
             })
-            resumen.to_excel(xl, sheet_name="Proyeccion resumen", index=False)
+            resumen.to_excel(xl, sheet_name="Proyección a futuro", index=False)
+            # Detalle día a día (para quien quiera el dato fino)
+            proj = pd.DataFrame({"Fecha": mc.dates})
+            for p in [5,25,50,75,95]:
+                proj[f"{etiquetas[p]} ({_sm})"] = mc.percentiles[p]
+            proj.to_excel(xl, sheet_name="Proyección detalle", index=False)
 
     buf.seek(0)
     return buf.getvalue()
@@ -1643,7 +1683,9 @@ if show_tab3:
             # ── CAP DE SEGURIDAD FINAL (en la app, independiente del optimizer) ──
             # Garantiza retornos y volatilidad realistas aunque el optimizer
             # entregue valores inflados por datos sucios de la BVL.
-            RET_MAX_EXCESO = 0.15   # máx 15% sobre la tasa libre por activo
+            RET_MAX_EXCESO = 0.10   # máx 10% sobre la tasa libre por activo
+                                    # (conservador: evita proyecciones eufóricas
+                                    # en acciones que rindieron mal como IPCHC)
             VOL_MAX_ACT = 0.35      # máx 35% vol anual: evita colas absurdas en
                                     # el Monte Carlo (GBM) a 3-5 años por el
                                     # efecto exponencial del interés compuesto
