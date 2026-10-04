@@ -1689,8 +1689,21 @@ if show_tab3:
             VOL_MAX_ACT = 0.35      # máx 35% vol anual: evita colas absurdas en
                                     # el Monte Carlo (GBM) a 3-5 años por el
                                     # efecto exponencial del interés compuesto
-            # 1) Capear retornos BL por activo
+            # 1) Mezclar el retorno BL (equilibrio teórico) con el retorno
+            #    histórico REAL de cada activo. El equilibrio asume que toda
+            #    acción rinde proporcional a su riesgo, lo cual es irreal para
+            #    acciones que rindieron mal (ej. IPCHC). Mezclar 50/50 con la
+            #    historia hace el retorno esperado más honesto.
             _bl = res.bl_returns.copy()
+            _rets_hist = limpiar_retornos(st.session_state.returns)
+            W_HIST = 0.50   # peso del histórico vs equilibrio
+            for a in _bl.index:
+                if es_fico(a): continue
+                if a in _rets_hist.columns:
+                    s = _rets_hist[a].dropna()
+                    if len(s) > 60:
+                        ret_hist = np.exp(s.mean()*PPY) - 1
+                        _bl[a] = (1-W_HIST)*_bl[a] + W_HIST*ret_hist
             _bl = _bl.clip(RF - RET_MAX_EXCESO, RF + RET_MAX_EXCESO)
             # El FICO conserva su retorno forzado real (no se capa)
             for _ft,_fd in FICOS.items():
