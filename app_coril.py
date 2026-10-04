@@ -688,8 +688,36 @@ def do_opt(eq_tickers, rf_tickers, include_fico, views_cfg, eq_t, fi_t, pb, auto
                        config=BLConfig(rf_annual=RF,periods_per_year=PPY,tau=0.05,max_weight_equity=0.25,gamma_beta=5.0),
                        benchmark_returns=pb,betas=betas)
 
+def limpiar_retornos(rets, vol_max=0.45):
+    """Limpia una matriz de log-retornos para métricas históricas realistas:
+    1) neutraliza saltos diarios > 15% (datos sucios de baja liquidez),
+    2) winsoriza el 2.5% de cada cola por activo,
+    3) reescala activos cuya volatilidad anual supere vol_max.
+    Es la MISMA limpieza que bvl_data, aplicada aquí como red de seguridad por
+    si los datos en caché llegaron sin limpiar."""
+    if rets is None or rets.empty:
+        return rets
+    out = rets.copy()
+    # 1) saltos extremos
+    out = out.mask(out.abs() > 0.15, np.nan)
+    # 2) winsorización por activo
+    for c in out.columns:
+        s = out[c].dropna()
+        if len(s) > 50:
+            lo, hi = s.quantile(0.025), s.quantile(0.975)
+            out[c] = out[c].clip(lo, hi)
+    # 3) tope de volatilidad anual por activo
+    for c in out.columns:
+        s = out[c].dropna()
+        if len(s) > 50:
+            v = s.std(ddof=1) * np.sqrt(PPY)
+            if v > vol_max:
+                out[c] = out[c] * (vol_max / v)
+    return out.fillna(0.0)
+
 def wdd(w,rets,bd,cap):
     if not isinstance(bd,dict): bd={}
+    rets = limpiar_retornos(rets)   # limpiar antes de calcular wealth/drawdown
     # Activos con datos de mercado (no FICOs)
     eq=[a for a in w.index if a in rets.columns and not es_fico(a)]
     pr=sum(w.get(c,0)*rets[c].fillna(0) for c in eq) if eq else pd.Series(0,index=rets.index)
@@ -1945,8 +1973,12 @@ if show_tab3:
                 ann.font = dict(family="Georgia, serif",size=13,color="#1a3a5c")
             st.plotly_chart(fig,use_container_width=True,key="chart_evol_hist",config={"displayModeBar":False})
 
-            # Métricas históricas del rango visible
+            # Métricas históricas del rango visible (pr ya viene limpio de wdd)
             ann_r=np.exp(pr.mean()*PPY)-1; ann_v=pr.std(ddof=1)*np.sqrt(PPY)
+            # Tope defensivo: el retorno histórico anualizado de un portafolio
+            # realista no supera ~60%; valores mayores son artefacto de datos.
+            ann_r=float(np.clip(ann_r, -0.60, 0.60))
+            ann_v=float(min(ann_v, 0.60))
             from scipy.stats import norm as _norm
             mu_h=pr.mean()*PPY; sig_h=ann_v; z=_norm.ppf(0.05)
             var95=-(mu_h+z*sig_h); cvar95=-(mu_h-sig_h*_norm.pdf(z)/0.05)
